@@ -193,23 +193,25 @@ features = df[[
     "player2_recent_win_pct"
 ]]
 
+# --- 2. Create target variable for logistic regression ---
+# Binary: did higher ranked player win?
+df["log_target"] = np.where(df["ranking_difference"] <= 0, 1, 0)  # or you can check if player1 is winner
+
+log_target = df["log_target"]
+
 # --- Step 5: Make target = game difference ---
-target = df["game_diff"]
+lin_target = df["game_diff"]
 
 # --- Step 6: Combine + save ---
 fe_df = features.copy()
-fe_df["target"] = target
-
+fe_df["lin_target"] = lin_target
+fe_df["log_target"] = log_target
 fe_df.to_csv("fe_matches.csv", index=False)
 print(f"Saved fe_matches.csv — shape: {fe_df.shape}")
 
 # --- 1. Load dataset for LDA and PCA ---
 df = pd.read_csv("fe_matches.csv")  # assuming you've saved it with all features
 
-# --- 2. Create target variable ---
-# Binary: did player 1 win? (1 if winner_name == player1, else 0)
-# Assuming player1 is the winner in your feature-engineered df:
-df["target"] = 1  # or you can check if player1 is winner
 
 # --- 3. Select features ---
 features = [
@@ -270,3 +272,5 @@ print("Explained variance by PCA components:", pca.explained_variance_ratio_)
 
 # --- 7. Apply LDA ---
 print("Starting LDA")
+
+
