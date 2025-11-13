@@ -269,3 +269,4 @@ X_test_pca = pca.transform(X_test_processed)
 print("Explained variance by PCA components:", pca.explained_variance_ratio_)
 
 # --- 7. Apply LDA ---
+print("Starting LDA")
