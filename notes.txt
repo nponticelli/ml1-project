@@ -1,0 +1,8 @@
+ranking difference, player 1 career surface win percentage, player 2 career surface win percentage, height difference, head to head win percentage, age difference, player 1 handedness, player 2 handedness, match type (3 set vs 5 set)
+
+
+linear regression ---> match margin of victory (differece in games won)
+
+logistic regression --> Higher ranked player winning match (1 or 0)
+
+clustering --> play style

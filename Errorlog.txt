@@ -1,0 +1,212 @@
+  tourney_id tourney_name  ... loser_rank  loser_rank_points
+0   2007-339     Adelaide  ...      153.0              287.0
+1   2007-339     Adelaide  ...       73.0              514.0
+2   2007-339     Adelaide  ...       94.0              438.0
+3   2007-339     Adelaide  ...       18.0             1365.0
+4   2007-339     Adelaide  ...       70.0              526.0
+
+[5 rows x 49 columns]
+
+Missing values per column:
+tourney_id                0
+tourney_name              0
+surface                  53
+draw_size                 0
+tourney_level             0
+tourney_date              0
+match_num                 0
+winner_id                 0
+winner_seed           29831
+winner_entry          45176
+winner_name               0
+winner_hand               0
+winner_ht               731
+winner_ioc                0
+winner_age                3
+loser_id                  0
+loser_seed            39662
+loser_entry           40996
+loser_name                0
+loser_hand                4
+loser_ht               1606
+loser_ioc                 0
+loser_age                 3
+score                     0
+best_of                   0
+round                     0
+minutes                5484
+w_ace                  3844
+w_df                   3844
+w_svpt                 3844
+w_1stIn                3844
+w_1stWon               3844
+w_2ndWon               3844
+w_SvGms                3844
+w_bpSaved              3844
+w_bpFaced              3844
+l_ace                  3844
+l_df                   3844
+l_svpt                 3844
+l_1stIn                3844
+l_1stWon               3844
+l_2ndWon               3844
+l_SvGms                3844
+l_bpSaved              3844
+l_bpFaced              3844
+winner_rank             327
+winner_rank_points      327
+loser_rank              879
+loser_rank_points       879
+dtype: int64
+
+We are now cleaning the dataset
+Sort dataset by match date
+Number of duplicate rows: 0
+Convert rankings to numeric, and fill blanks with max value (unranked players should be ranked lowly)
+
+Missing surface will be the mode
+We want to clean the score column to calculate games difference
+                       score          clean_score
+0                    7-5 6-4              7-5 6-4
+1                    6-4 6-2              6-4 6-2
+2                    7-5 7-5              7-5 7-5
+3                    6-3 6-4              6-3 6-4
+4                5-7 6-4 7-5          5-7 6-4 7-5
+...                      ...                  ...
+51966  4-2 4-2 3-4(4) 4-3(5)      4-2 4-2 3-4 4-3
+51967         4-2 4-3(4) 4-2          4-2 4-3 4-2
+51968    2-4 4-2 1-4 4-0 4-1  2-4 4-2 1-4 4-0 4-1
+51969            4-2 4-2 4-1          4-2 4-2 4-1
+51970     2-4 4-3(8) 4-0 4-2      2-4 4-3 4-0 4-2
+
+[51971 rows x 2 columns]
+Now based off of the clean score we want to compute games difference
+
+Seeding, entry, rank, and points will be N/A if missing
+
+All other columns (game statistical measures) will be the mean of the respective feature
+tourney_id            0
+tourney_name          0
+surface               0
+draw_size             0
+tourney_level         0
+tourney_date          0
+match_num             0
+winner_id             0
+winner_seed           0
+winner_entry          0
+winner_name           0
+winner_hand           0
+winner_ht             0
+winner_ioc            0
+winner_age            0
+loser_id              0
+loser_seed            0
+loser_entry           0
+loser_name            0
+loser_hand            0
+loser_ht              0
+loser_ioc             0
+loser_age             0
+score                 0
+best_of               0
+round                 0
+minutes               0
+w_ace                 0
+w_df                  0
+w_svpt                0
+w_1stIn               0
+w_1stWon              0
+w_2ndWon              0
+w_SvGms               0
+w_bpSaved             0
+w_bpFaced             0
+l_ace                 0
+l_df                  0
+l_svpt                0
+l_1stIn               0
+l_1stWon              0
+l_2ndWon              0
+l_SvGms               0
+l_bpSaved             0
+l_bpFaced             0
+winner_rank           0
+winner_rank_points    0
+loser_rank            0
+loser_rank_points     0
+clean_score           0
+game_diff             0
+dtype: int64
+Number of duplicate rows: 0
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 51971 entries, 0 to 51970
+Data columns (total 51 columns):
+ #   Column              Non-Null Count  Dtype  
+---  ------              --------------  -----  
+ 0   tourney_id          51971 non-null  object 
+ 1   tourney_name        51971 non-null  object 
+ 2   surface             51971 non-null  object 
+ 3   draw_size           51971 non-null  int64  
+ 4   tourney_level       51971 non-null  object 
+ 5   tourney_date        51971 non-null  int64  
+ 6   match_num           51971 non-null  int64  
+ 7   winner_id           51971 non-null  int64  
+ 8   winner_seed         51971 non-null  object 
+ 9   winner_entry        51971 non-null  object 
+ 10  winner_name         51971 non-null  object 
+ 11  winner_hand         51971 non-null  object 
+ 12  winner_ht           51971 non-null  float64
+ 13  winner_ioc          51971 non-null  object 
+ 14  winner_age          51971 non-null  float64
+ 15  loser_id            51971 non-null  int64  
+ 16  loser_seed          51971 non-null  object 
+ 17  loser_entry         51971 non-null  object 
+ 18  loser_name          51971 non-null  object 
+ 19  loser_hand          51971 non-null  object 
+ 20  loser_ht            51971 non-null  float64
+ 21  loser_ioc           51971 non-null  object 
+ 22  loser_age           51971 non-null  float64
+ 23  score               51971 non-null  object 
+ 24  best_of             51971 non-null  int64  
+ 25  round               51971 non-null  object 
+ 26  minutes             51971 non-null  float64
+ 27  w_ace               51971 non-null  float64
+ 28  w_df                51971 non-null  float64
+ 29  w_svpt              51971 non-null  float64
+ 30  w_1stIn             51971 non-null  float64
+ 31  w_1stWon            51971 non-null  float64
+ 32  w_2ndWon            51971 non-null  float64
+ 33  w_SvGms             51971 non-null  float64
+ 34  w_bpSaved           51971 non-null  float64
+ 35  w_bpFaced           51971 non-null  float64
+ 36  l_ace               51971 non-null  float64
+ 37  l_df                51971 non-null  float64
+ 38  l_svpt              51971 non-null  float64
+ 39  l_1stIn             51971 non-null  float64
+ 40  l_1stWon            51971 non-null  float64
+ 41  l_2ndWon            51971 non-null  float64
+ 42  l_SvGms             51971 non-null  float64
+ 43  l_bpSaved           51971 non-null  float64
+ 44  l_bpFaced           51971 non-null  float64
+ 45  winner_rank         51971 non-null  float64
+ 46  winner_rank_points  51971 non-null  object 
+ 47  loser_rank          51971 non-null  float64
+ 48  loser_rank_points   51971 non-null  object 
+ 49  clean_score         51971 non-null  object 
+ 50  game_diff           51971 non-null  float64
+dtypes: float64(26), int64(6), object(19)
+memory usage: 20.2+ MB
+None
+          draw_size  tourney_date  ...    loser_rank     game_diff
+count  51971.000000  5.197100e+04  ...  51971.000000  51971.000000
+mean      56.312597  2.015309e+07  ...    150.429278      5.033158
+std       41.453035  5.256918e+04  ...    322.142628      2.895591
+min        2.000000  2.007010e+07  ...      1.000000     -8.000000
+25%       32.000000  2.011022e+07  ...     36.000000      3.000000
+50%       32.000000  2.015063e+07  ...     68.000000      5.000000
+75%       64.000000  2.020012e+07  ...    115.500000      7.000000
+max      128.000000  2.024122e+07  ...   2159.000000     18.000000
+
+[8 rows x 32 columns]
+Saved fe_matches.csv — shape: (51971, 12)
+Explained variance by PCA components: [0.21438217 0.17721004 0.16466639 0.14743778 0.13510225]
