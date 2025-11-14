@@ -96,19 +96,84 @@ print(df.describe())
 # --- Basic cleaning ---
 df = df.dropna(subset=["winner_id", "loser_id"])
 
+def reorder_by_seed(row):
+    # Determine which player is higher seeded (lower rank number)
+    w_rank = row["winner_rank"]
+    l_rank = row["loser_rank"]
+
+    # Winner is higher-seeded
+    if w_rank < l_rank:
+        higher = {
+            "id": row["winner_id"],
+            "name": row["winner_name"],
+            "hand": row["winner_hand"],
+            "ht": row["winner_ht"],
+            "age": row["winner_age"],
+            "rank": row["winner_rank"]
+        }
+        lower = {
+            "id": row["loser_id"],
+            "name": row["loser_name"],
+            "hand": row["loser_hand"],
+            "ht": row["loser_ht"],
+            "age": row["loser_age"],
+            "rank": row["loser_rank"]
+        }
+        higher_won = 1  # winner is higher seed
+
+    # Loser is higher-seeded
+    else:
+        higher = {
+            "id": row["loser_id"],
+            "name": row["loser_name"],
+            "hand": row["loser_hand"],
+            "ht": row["loser_ht"],
+            "age": row["loser_age"],
+            "rank": row["loser_rank"]
+        }
+        lower = {
+            "id": row["winner_id"],
+            "name": row["winner_name"],
+            "hand": row["winner_hand"],
+            "ht": row["winner_ht"],
+            "age": row["winner_age"],
+            "rank": row["winner_rank"]
+        }
+        higher_won = 0  # lower seed (winner) upset the match
+
+    return pd.Series({
+        "higher_id": higher["id"],
+        "lower_id": lower["id"],
+        "higher_name": higher["name"],
+        "lower_name": lower["name"],
+        "higher_hand": higher["hand"],
+        "lower_hand": lower["hand"],
+        "higher_ht": higher["ht"],
+        "lower_ht": lower["ht"],
+        "higher_age": higher["age"],
+        "lower_age": lower["age"],
+        "higher_rank": higher["rank"],
+        "lower_rank": lower["rank"],
+        "log_target": higher_won
+    })
+
+# Apply this to entire dataset
+reordered = df.apply(reorder_by_seed, axis=1)
+df = pd.concat([df, reordered], axis=1)
+
+
 # --- Ranking difference ---
-df["ranking_difference"] = df["winner_rank"] - df["loser_rank"]
+df["ranking_difference"] = df["higher_rank"] - df["lower_rank"]
+df["height_difference"] = df["higher_ht"] - df["lower_ht"]
+df["age_difference"] = df["higher_age"] - df["lower_age"]
 
-# --- Height difference ---
-df["height_difference"] = df["winner_ht"] - df["loser_ht"]
-
-# --- Age difference ---
-df["age_difference"] = df["winner_age"] - df["loser_age"]
-
-# --- Handedness encoding ---
 hand_map = {"R": 1, "L": 0}
-df["player1_hand"] = df["winner_hand"].map(hand_map)
-df["player2_hand"] = df["loser_hand"].map(hand_map)
+df["higher_hand"] = df["higher_hand"].map(hand_map)
+df["lower_hand"] = df["lower_hand"].map(hand_map)
+
+# Your existing H2H and recent-win code can remain,
+# but rename player1 → higher_id, player2 → lower_id.
+
 
 # --- Match type (3-set vs 5-set) ---
 df["match_type"] = np.where(df["best_of"] == 5, 1, 0)
@@ -180,22 +245,18 @@ for idx, row in df.iterrows():
 
 # --- Select simplified features ---
 features = df[[
-    "winner_name", 
-    "loser_name",
+    "higher_id",
+    "lower_id",
     "ranking_difference",
     "height_difference",
     "age_difference",
-    "player1_hand",
-    "player2_hand",
+    "higher_hand",
+    "lower_hand",
     "player1_h2h_win_pct",
     "match_type", 
     "player1_recent_win_pct",
     "player2_recent_win_pct"
 ]]
-
-# --- 2. Create target variable for logistic regression ---
-# Binary: did higher ranked player win?
-df["log_target"] = np.where(df["ranking_difference"] <= 0, 1, 0)  # or you can check if player1 is winner
 
 log_target = df["log_target"]
 
@@ -218,8 +279,8 @@ features = [
     "ranking_difference",
     "height_difference",
     "age_difference",
-    "player1_hand",
-    "player2_hand",
+    "higher_hand",
+    "lower_hand",
     "player1_h2h_win_pct",
     "match_type",
     "player1_recent_win_pct",
@@ -227,7 +288,7 @@ features = [
 ]
 
 X = df[features]
-y = df["target"]
+y = df["log_target"]
 
 scaler = StandardScaler()
 
@@ -253,7 +314,7 @@ cov_matrix = np.cov(x_scaled, rowvar=False)
 print("This is the covariance matrix")
 print(cov_matrix)
 
-cat_features = ["player1_hand", "player2_hand", "match_type"]
+cat_features = ["higher_hand", "lower_hand", "match_type"]
 
 
 X_train_num = scaler.fit_transform(X_train[num_features])
