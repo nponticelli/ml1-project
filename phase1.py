@@ -6,8 +6,13 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
 from collections import defaultdict
 import matplotlib.pyplot as plt
+from numpy.linalg import svd
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import seaborn as sns
 
 df = pd.read_csv('atp_matches.csv')
 
@@ -178,8 +183,6 @@ df["lower_hand"] = df["lower_hand"].map(hand_map)
 # --- Match type (3-set vs 5-set) ---
 df["match_type"] = np.where(df["best_of"] == 5, 1, 0)
 
-
-
 # Dictionary to store cumulative head-to-head counts
 # Initialize column
 df["higher_h2h_win_pct"] = np.nan
@@ -296,8 +299,6 @@ for idx, row in df.iterrows():
     ewma_data[(low, surf)]['weight'] += alpha
     ewma_data[(low, surf)]['count']  += 1
 
-
-
 # --- Select simplified features ---
 features = df[[
     "higher_id",
@@ -333,7 +334,6 @@ print(f"Saved fe_matches.csv — shape: {fe_df.shape}")
 # --- 1. Load dataset for LDA and PCA ---
 df = pd.read_csv("fe_matches.csv")  # assuming you've saved it with all features
 
-
 # --- 3. Select features ---
 features = [
     "ranking_difference",
@@ -343,8 +343,6 @@ features = [
     "lower_hand",
     "higher_h2h_win_pct",
     "match_type",
-    "higher_recent_win_pct",
-    "lower_recent_win_pct",
     "higher_surface_ewma",
     "lower_surface_ewma"
 ]
@@ -374,6 +372,15 @@ cov_matrix = np.cov(x_train_scaled, rowvar=False)
 print("This is the covariance matrix")
 print(cov_matrix)
 
+# Pearson correlation matrix
+corr_matrix = df[num_features].corr(method="pearson")
+
+# Heatmap
+plt.figure(figsize=(8,6))
+sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", square=True)
+plt.title("Pearson Correlation Heatmap")
+plt.show()
+
 cat_features = ["higher_hand", "lower_hand", "match_type"]
 
 # Concatenate categorical features without scaling
@@ -399,4 +406,80 @@ X_test_lda = lda.transform(X_test_processed)
 
 print("Shape of LDA-transformed training set:", X_train_lda.shape)
 print("Explained variance ratio (discriminative power):", lda.explained_variance_ratio_)
+plt.figure(figsize=(8,4))
+plt.hist(X_train_lda[y_train==1], alpha=0.5, label='Higher Seed Wins (1)')
+plt.hist(X_train_lda[y_train==0], alpha=0.5, label='Lower Seed Wins (0)')
+plt.title("LDA Projection")
+plt.xlabel("LD1")
+plt.ylabel("Frequency")
+plt.legend()
+plt.show()
 
+# Build Random Forest model
+rf = RandomForestClassifier(
+    n_estimators=300,
+    max_depth=None,
+    min_samples_split=5,
+    min_samples_leaf=3,
+    class_weight="balanced",   # handles imbalance without resampling
+    random_state=42,
+    n_jobs=-1
+)
+
+rf.fit(X_train, y_train)
+
+# Predictions
+y_pred_rf = rf.predict(X_test)
+
+print("Random Forest Accuracy:", accuracy_score(y_test, y_pred_rf))
+print("\nClassification Report:\n", classification_report(y_test, y_pred_rf))
+
+# Feature importance ranking
+importances = rf.feature_importances_
+feature_importance_df = pd.DataFrame({
+    "Feature": X.columns,
+    "Importance": importances
+}).sort_values(by="Importance", ascending=False)
+
+print("\n===== RANDOM FOREST FEATURE IMPORTANCE =====")
+print(feature_importance_df)
+
+#Single Value Decomposition
+print("Single Value Decomposition")
+# Use the already scaled training matrix (x_train_scaled)
+U, S, Vt = svd(x_train_scaled, full_matrices=False)
+
+print("Singular values:")
+print(S)
+
+# Compute explained variance ratio from singular values
+variance_explained = (S**2) / np.sum(S**2)
+print("\nVariance explained by each singular value (component):")
+print(variance_explained)
+
+print("\nCumulative variance explained:")
+print(np.cumsum(variance_explained))
+
+condition_number = S[0] / S[-1]
+print("\nCondition number:", condition_number)
+
+
+#VIF
+print("Variance Inflation Factor (VIF)")
+# Replace X with your actual feature DataFrame
+# Make sure it contains only numeric feature columns — no target variable
+X = df[num_features].copy()
+
+# Add a constant column for statsmodels
+X_const = X.copy()
+X_const["intercept"] = 1
+
+vif_df = pd.DataFrame()
+vif_df["feature"] = X_const.columns
+vif_df["VIF"] = [variance_inflation_factor(X_const.values, i) for i in range(X_const.shape[1])]
+
+# Drop intercept row for readability
+vif_df = vif_df[vif_df.feature != "intercept"]
+
+print("\n===== VARIANCE INFLATION FACTOR (VIF) RESULTS =====")
+print(vif_df)

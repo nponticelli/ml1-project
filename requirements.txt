@@ -10,6 +10,7 @@ mkl_random @ file:///home/task_176159293775784/conda-bld/mkl_random_176159295186
 numpy @ file:///home/task_176252779912422/conda-bld/numpy_and_numpy_base_1762528497814/work/dist/numpy-2.3.4-cp314-cp314-linux_x86_64.whl#sha256=e315099324d117702c4704ff5ca2e50ab550328a251addd0a46952eed85fb6a6
 packaging @ file:///home/task_176104874909647/conda-bld/packaging_1761049078203/work
 pandas==2.3.3
+patsy==1.0.2
 pillow @ file:///work/buildout/croot/pillow_1762546694560/work
 pyparsing @ file:///work/buildout/croot/pyparsing_1762548730019/work
 PyQt6==6.9.1
@@ -21,6 +22,7 @@ scipy==1.16.3
 setuptools==80.9.0
 sip @ file:///work/buildout/croot/sip_1761939556033/work
 six @ file:///work/buildout/croot/six_1759952127748/work
+statsmodels==0.14.5
 threadpoolctl==3.6.0
 tornado @ file:///work/buildout/croot/tornado_1759952458497/work
 tzdata==2025.2
