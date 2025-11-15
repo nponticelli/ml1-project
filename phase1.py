@@ -17,7 +17,7 @@ print(df.isnull().sum())
 print("\nWe are now cleaning the dataset")
 
 print("Sort dataset by match date")
-df = df.sort_values("tourney_date").sort_values("match_num")
+df = df.sort_values(["tourney_date", "match_num"])
 
 num_duplicates = df.duplicated().sum()
 print(f"Number of duplicate rows: {num_duplicates}")
@@ -185,61 +185,62 @@ h2h_dict = {}
 
 # Loop through matches in order
 for idx, row in df.iterrows():
-    p1 = row["higher_id"]
-    p2 = row["lower_id"]
+    p_high = row["higher_id"]
+    p_low = row["lower_id"]
+    p_min, p_max = sorted([p_high, p_low])
 
     # Use tuple in consistent order
-    key = (min(p1, p2), max(p1, p2))
+    key = (p_min, p_max)
 
-    # Check previous head-to-head stats
+    # If previous H2H exists → compute percentage BEFORE this match
     if key in h2h_dict:
-        wins, total = h2h_dict[key]
-        # Determine player1 perspective
-        if p1 < p2:
-            h2h = wins / total if total > 0 else np.nan
+        wins_min, total = h2h_dict[key]
+        win_pct_min = wins_min / total if total > 0 else 0.5
+        #the higher ranked player also has the first portion of the key
+        if p_high == p_min:
+            df.at[idx, "higher_h2h_win_pct"] = win_pct_min
+        #the higher ranked player is the second part of the key, win % must be reversed
         else:
-            h2h = (total - wins) / total if total > 0 else np.nan
-        df.at[idx, "higher_h2h_win_pct"] = h2h
+            df.at[idx, "higher_h2h_win_pct"] = 1 - win_pct_min
     else:
-        df.at[idx, "higher_h2h_win_pct"] = np.nan  # first match
+        df.at[idx, "higher_h2h_win_pct"] = 0.5  # neutral before first match
 
-    # Update cumulative counts
+    # Update after match
     if key not in h2h_dict:
         h2h_dict[key] = [0, 0]
-    # Increment winner count
-    if p1 < p2:
-        h2h_dict[key][0] += 1  # p1 wins
-    else:
-        h2h_dict[key][0] += 0  # winner is "player2" from dictionary perspective
-    h2h_dict[key][1] += 1  # total matches
+
+    # Update total matches
+    h2h_dict[key][1] += 1
+
+    # Update wins for the player that actually won
+    winner = row["winner_id"]
+    if winner == p_min:
+        h2h_dict[key][0] += 1
 
 df["higher_h2h_win_pct"] = df["higher_h2h_win_pct"].fillna(0.5)
 
-#Recent win percentage
 df["higher_recent_win_pct"] = np.nan
 df["lower_recent_win_pct"] = np.nan
 
-last5_dict = defaultdict(lambda: deque(maxlen=5))
+# Dictionary: player_id -> deque of last 5 results (1 = win, 0 = loss)
+last5 = defaultdict(lambda: deque(maxlen=5))
 
 for idx, row in df.iterrows():
-    p1 = row["higher_id"]
-    p2 = row["lower_id"]
+    high = row["higher_id"]
+    low  = row["lower_id"]
+    high_win = row["log_target"]      # 1 = higher won, 0 = lower upset
 
-    # Player 1 perspective (winner)
-    if p1 in last5_dict and len(last5_dict[p1]) > 0:
-        df.at[idx, "higher_recent_win_pct"] = np.mean(last5_dict[p1])
-    else:
-        df.at[idx, "higher_recent_win_pct"] = 0.5  # neutral if no history
+    # Fill feature BEFORE updating today's match
+    df.at[idx, "higher_recent_win_pct"] = (
+        np.mean(last5[high]) if len(last5[high]) > 0 else 0.5
+    )
+    df.at[idx, "lower_recent_win_pct"] = (
+        np.mean(last5[low]) if len(last5[low]) > 0 else 0.5
+    )
 
-    # Player 2 perspective (loser)
-    if p2 in last5_dict and len(last5_dict[p2]) > 0:
-        df.at[idx, "lower_recent_win_pct"] = np.mean(last5_dict[p2])
-    else:
-        df.at[idx, "lower_recent_win_pct"] = 0.5  # neutral if no history
-
-    # Update last 5 results
-    last5_dict[p1].append(1)  # winner won
-    last5_dict[p2].append(0)  # loser lost
+    # Update last 5 for both players AFTER match
+    last5[high].append(high_win)
+    last5[low].append(1 - high_win)
 
 # --- Select simplified features ---
 features = df[[
@@ -305,20 +306,18 @@ num_features = [
     "lower_recent_win_pct"
 ]
 
-x_scaled = scaler.fit_transform(X[num_features])
+x_train_scaled = scaler.fit_transform(X_train[num_features])
+X_test__scaled = scaler.transform(X_test[num_features])
 
-cov_matrix = np.cov(x_scaled, rowvar=False)
+cov_matrix = np.cov(x_train_scaled, rowvar=False)
 print("This is the covariance matrix")
 print(cov_matrix)
 
 cat_features = ["higher_hand", "lower_hand", "match_type"]
 
-X_train_num = scaler.fit_transform(X_train[num_features])
-X_test_num = scaler.transform(X_test[num_features])
-
 # Concatenate categorical features without scaling
-X_train_processed = np.hstack([X_train_num, X_train[cat_features].values])
-X_test_processed = np.hstack([X_test_num, X_test[cat_features].values])
+X_train_processed = np.hstack([x_train_scaled, X_train[cat_features].values])
+X_test_processed = np.hstack([X_test__scaled, X_test[cat_features].values])
 
 # --- 6. Apply PCA ---
 pca = PCA(n_components=5)
