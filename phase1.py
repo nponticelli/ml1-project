@@ -91,7 +91,6 @@ print(df.info())
 print(df.describe())
 
 #Now we are going to feature engineer columns
-
 # --- Basic cleaning ---
 df = df.dropna(subset=["winner_id", "loser_id"])
 
