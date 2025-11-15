@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
 import re
-from collections import defaultdict, deque
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from collections import deque
+from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import train_test_split
+from collections import defaultdict
+import matplotlib.pyplot as plt
 
 df = pd.read_csv('atp_matches.csv')
 
@@ -162,8 +164,8 @@ df = pd.concat([df, reordered], axis=1)
 
 # --- Ranking difference ---
 df["ranking_difference"] =  df["lower_rank"] - df["higher_rank"]
-df["height_difference"] =  df["lower_ht"] - df["higher_ht"]
-df["age_difference"] = df["lower_age"] - df["higher_age"]
+df["height_difference"] =  round(df["lower_ht"] - df["higher_ht"],2)
+df["age_difference"] = round(df["lower_age"] - df["higher_age"],2)
 
 hand_map = {"R": 1, "L": 0}
 df["higher_hand"] = df["higher_hand"].map(hand_map)
@@ -176,11 +178,11 @@ df["lower_hand"] = df["lower_hand"].map(hand_map)
 # --- Match type (3-set vs 5-set) ---
 df["match_type"] = np.where(df["best_of"] == 5, 1, 0)
 
-# Initialize column
-df["higher_h2h_win_pct"] = np.nan
+
 
 # Dictionary to store cumulative head-to-head counts
-# Structure: {(player1_id, player2_id): [p1_wins, total_matches]}
+# Initialize column
+df["higher_h2h_win_pct"] = np.nan
 h2h_dict = {}
 
 # Loop through matches in order
@@ -195,7 +197,12 @@ for idx, row in df.iterrows():
     # If previous H2H exists → compute percentage BEFORE this match
     if key in h2h_dict:
         wins_min, total = h2h_dict[key]
-        win_pct_min = wins_min / total if total > 0 else 0.5
+
+        if total < 3:
+            win_pct_min = .5
+        else:
+            win_pct_min = wins_min / total if total > 0 else 0.5
+
         #the higher ranked player also has the first portion of the key
         if p_high == p_min:
             df.at[idx, "higher_h2h_win_pct"] = win_pct_min
@@ -242,6 +249,55 @@ for idx, row in df.iterrows():
     last5[high].append(high_win)
     last5[low].append(1 - high_win)
 
+#Now we are creating a metric about a players success on a surface
+# Hyperparameters
+alpha = 0.2            # EWMA weight (tune between ~0.1 - 0.3)
+min_matches = 3        # Minimum required matches to trust estimate
+neutral_value = 0.5    # Fallback value
+
+# Dictionary to track exponentially weighted stats
+# key: (player_id, surface)   value = {'score': ew_sum, 'weight': ew_weight, 'count': match_count}
+ewma_data = defaultdict(lambda: {'score': 0.0, 'weight': 0.0, 'count': 0})
+
+# Initialize output columns
+df['higher_surface_ewma'] = np.nan
+df['lower_surface_ewma'] = np.nan
+for idx, row in df.iterrows():
+    surf = row['surface']
+    high = row['higher_id']
+    low  = row['lower_id']
+
+    h_stats = ewma_data[(high, surf)]
+    l_stats = ewma_data[(low, surf)]
+
+    # Compute **prior** EWMA values (before updating with today's match)
+    if h_stats['count'] >= min_matches and h_stats['weight'] > 0:
+        df.at[idx, 'higher_surface_ewma'] = h_stats['score'] / h_stats['weight']
+    else:
+        df.at[idx, 'higher_surface_ewma'] = neutral_value
+
+    if l_stats['count'] >= min_matches and l_stats['weight'] > 0:
+        df.at[idx, 'lower_surface_ewma'] = l_stats['score'] / l_stats['weight']
+    else:
+        df.at[idx, 'lower_surface_ewma'] = neutral_value
+
+    # Determine winner and update **AFTER** recording features
+    winner = row['winner_id']
+
+    # Update high player record
+    h_win = 1 if winner == high else 0
+    ewma_data[(high, surf)]['score'] += h_win * alpha
+    ewma_data[(high, surf)]['weight'] += alpha
+    ewma_data[(high, surf)]['count']  += 1
+
+    # Update low player record
+    l_win = 1 if winner == low else 0
+    ewma_data[(low, surf)]['score'] += l_win * alpha
+    ewma_data[(low, surf)]['weight'] += alpha
+    ewma_data[(low, surf)]['count']  += 1
+
+
+
 # --- Select simplified features ---
 features = df[[
     "higher_id",
@@ -256,7 +312,10 @@ features = df[[
     "higher_h2h_win_pct",
     "match_type", 
     "higher_recent_win_pct",
-    "lower_recent_win_pct"
+    "lower_recent_win_pct",
+    "surface",
+    "higher_surface_ewma",
+    "lower_surface_ewma"
 ]]
 
 log_target = df["log_target"]
@@ -285,7 +344,9 @@ features = [
     "higher_h2h_win_pct",
     "match_type",
     "higher_recent_win_pct",
-    "lower_recent_win_pct"
+    "lower_recent_win_pct",
+    "higher_surface_ewma",
+    "lower_surface_ewma"
 ]
 
 X = df[features]
@@ -302,8 +363,8 @@ num_features = [
     "height_difference",
     "age_difference",
     "higher_h2h_win_pct",
-    "higher_recent_win_pct",
-    "lower_recent_win_pct"
+    "higher_surface_ewma",
+    "lower_surface_ewma"
 ]
 
 x_train_scaled = scaler.fit_transform(X_train[num_features])
@@ -328,5 +389,14 @@ print("Explained variance by PCA components:", pca.explained_variance_ratio_)
 
 # --- 7. Apply LDA ---
 print("Starting LDA")
+# Create LDA object
+lda = LinearDiscriminantAnalysis(n_components=1)  # For binary target, max n_components = 1
+# Fit LDA on training data
+X_train_lda = lda.fit_transform(X_train_processed, y_train)
 
+# Transform test data
+X_test_lda = lda.transform(X_test_processed)
+
+print("Shape of LDA-transformed training set:", X_train_lda.shape)
+print("Explained variance ratio (discriminative power):", lda.explained_variance_ratio_)
 
