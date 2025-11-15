@@ -17,7 +17,7 @@ print(df.isnull().sum())
 print("\nWe are now cleaning the dataset")
 
 print("Sort dataset by match date")
-df = df.sort_values(by=["tourney_date", "match_num"]).reset_index(drop=True)
+df = df.sort_values("tourney_date").sort_values("match_num")
 
 num_duplicates = df.duplicated().sum()
 print(f"Number of duplicate rows: {num_duplicates}")
@@ -49,13 +49,12 @@ def clean_score(s):
     return s
 
 df["clean_score"] = df["score"].apply(clean_score)
-print(df[["score", "clean_score"]])
 
 print("Now based off of the clean score we want to compute games difference")
-def compute_game_diff(clean_score):
-    if not clean_score:
+def compute_game_diff(clean_score2):
+    if not clean_score2:
         return np.nan
-    sets = clean_score.split()
+    sets = clean_score2.split()
     p1_games = 0
     p2_games = 0
     for s in sets:
@@ -63,7 +62,7 @@ def compute_game_diff(clean_score):
             g1, g2 = map(int, s.split("-"))
             p1_games += g1
             p2_games += g2
-        except:
+        except ValueError:
             continue
     return p1_games - p2_games
 
@@ -72,8 +71,8 @@ df["game_diff"] = df["clean_score"].apply(compute_game_diff)
 print("\nSeeding, entry, rank, and points will be N/A if missing")
 seed_entry_rank_cols = ['winner_seed', 'loser_seed',
                         'winner_entry', 'loser_entry',
-                        'winner_rank', 'winner_rank_points',
-                        'loser_rank', 'loser_rank_points']
+                         'winner_rank_points',
+                         'loser_rank_points']
 df[seed_entry_rank_cols] = df[seed_entry_rank_cols].fillna('N/A')
 
 print("\nAll other columns (game statistical measures) will be the mean of the respective feature")
@@ -96,48 +95,48 @@ print(df.describe())
 # --- Basic cleaning ---
 df = df.dropna(subset=["winner_id", "loser_id"])
 
-def reorder_by_seed(row):
+def reorder_by_seed(row2):
     # Determine which player is higher seeded (lower rank number)
-    w_rank = row["winner_rank"]
-    l_rank = row["loser_rank"]
+    w_rank = row2["winner_rank"]
+    l_rank = row2["loser_rank"]
 
     # Winner is higher-seeded
     if w_rank < l_rank:
         higher = {
-            "id": row["winner_id"],
-            "name": row["winner_name"],
-            "hand": row["winner_hand"],
-            "ht": row["winner_ht"],
-            "age": row["winner_age"],
-            "rank": row["winner_rank"]
+            "id": row2["winner_id"],
+            "name": row2["winner_name"],
+            "hand": row2["winner_hand"],
+            "ht": row2["winner_ht"],
+            "age": row2["winner_age"],
+            "rank": row2["winner_rank"]
         }
         lower = {
-            "id": row["loser_id"],
-            "name": row["loser_name"],
-            "hand": row["loser_hand"],
-            "ht": row["loser_ht"],
-            "age": row["loser_age"],
-            "rank": row["loser_rank"]
+            "id": row2["loser_id"],
+            "name": row2["loser_name"],
+            "hand": row2["loser_hand"],
+            "ht": row2["loser_ht"],
+            "age": row2["loser_age"],
+            "rank": row2["loser_rank"]
         }
         higher_won = 1  # winner is higher seed
 
     # Loser is higher-seeded
     else:
         higher = {
-            "id": row["loser_id"],
-            "name": row["loser_name"],
-            "hand": row["loser_hand"],
-            "ht": row["loser_ht"],
-            "age": row["loser_age"],
-            "rank": row["loser_rank"]
+            "id": row2["loser_id"],
+            "name": row2["loser_name"],
+            "hand": row2["loser_hand"],
+            "ht": row2["loser_ht"],
+            "age": row2["loser_age"],
+            "rank": row2["loser_rank"]
         }
         lower = {
-            "id": row["winner_id"],
-            "name": row["winner_name"],
-            "hand": row["winner_hand"],
-            "ht": row["winner_ht"],
-            "age": row["winner_age"],
-            "rank": row["winner_rank"]
+            "id": row2["winner_id"],
+            "name": row2["winner_name"],
+            "hand": row2["winner_hand"],
+            "ht": row2["winner_ht"],
+            "age": row2["winner_age"],
+            "rank": row2["winner_rank"]
         }
         higher_won = 0  # lower seed (winner) upset the match
 
@@ -163,9 +162,9 @@ df = pd.concat([df, reordered], axis=1)
 
 
 # --- Ranking difference ---
-df["ranking_difference"] = df["higher_rank"] - df["lower_rank"]
-df["height_difference"] = df["higher_ht"] - df["lower_ht"]
-df["age_difference"] = df["higher_age"] - df["lower_age"]
+df["ranking_difference"] =  df["lower_rank"] - df["higher_rank"]
+df["height_difference"] =  df["lower_ht"] - df["higher_ht"]
+df["age_difference"] = df["lower_age"] - df["higher_age"]
 
 hand_map = {"R": 1, "L": 0}
 df["higher_hand"] = df["higher_hand"].map(hand_map)
@@ -179,7 +178,7 @@ df["lower_hand"] = df["lower_hand"].map(hand_map)
 df["match_type"] = np.where(df["best_of"] == 5, 1, 0)
 
 # Initialize column
-df["player1_h2h_win_pct"] = np.nan
+df["higher_h2h_win_pct"] = np.nan
 
 # Dictionary to store cumulative head-to-head counts
 # Structure: {(player1_id, player2_id): [p1_wins, total_matches]}
@@ -187,8 +186,8 @@ h2h_dict = {}
 
 # Loop through matches in order
 for idx, row in df.iterrows():
-    p1 = row["winner_id"]
-    p2 = row["loser_id"]
+    p1 = row["higher_id"]
+    p2 = row["lower_id"]
 
     # Use tuple in consistent order
     key = (min(p1, p2), max(p1, p2))
@@ -201,9 +200,9 @@ for idx, row in df.iterrows():
             h2h = wins / total if total > 0 else np.nan
         else:
             h2h = (total - wins) / total if total > 0 else np.nan
-        df.at[idx, "player1_h2h_win_pct"] = h2h
+        df.at[idx, "higher_h2h_win_pct"] = h2h
     else:
-        df.at[idx, "player1_h2h_win_pct"] = np.nan  # first match
+        df.at[idx, "higher_h2h_win_pct"] = np.nan  # first match
 
     # Update cumulative counts
     if key not in h2h_dict:
@@ -215,29 +214,29 @@ for idx, row in df.iterrows():
         h2h_dict[key][0] += 0  # winner is "player2" from dictionary perspective
     h2h_dict[key][1] += 1  # total matches
 
-df["player1_h2h_win_pct"] = df["player1_h2h_win_pct"].fillna(0.5)
+df["higher_h2h_win_pct"] = df["higher_h2h_win_pct"].fillna(0.5)
 
 #Recent win percentage
-df["player1_recent_win_pct"] = np.nan
-df["player2_recent_win_pct"] = np.nan
+df["higher_recent_win_pct"] = np.nan
+df["lower_recent_win_pct"] = np.nan
 
 last5_dict = defaultdict(lambda: deque(maxlen=5))
 
 for idx, row in df.iterrows():
-    p1 = row["winner_id"]
-    p2 = row["loser_id"]
+    p1 = row["higher_id"]
+    p2 = row["lower_id"]
 
     # Player 1 perspective (winner)
     if p1 in last5_dict and len(last5_dict[p1]) > 0:
-        df.at[idx, "player1_recent_win_pct"] = np.mean(last5_dict[p1])
+        df.at[idx, "higher_recent_win_pct"] = np.mean(last5_dict[p1])
     else:
-        df.at[idx, "player1_recent_win_pct"] = 0.5  # neutral if no history
+        df.at[idx, "higher_recent_win_pct"] = 0.5  # neutral if no history
 
     # Player 2 perspective (loser)
     if p2 in last5_dict and len(last5_dict[p2]) > 0:
-        df.at[idx, "player2_recent_win_pct"] = np.mean(last5_dict[p2])
+        df.at[idx, "lower_recent_win_pct"] = np.mean(last5_dict[p2])
     else:
-        df.at[idx, "player2_recent_win_pct"] = 0.5  # neutral if no history
+        df.at[idx, "lower_recent_win_pct"] = 0.5  # neutral if no history
 
     # Update last 5 results
     last5_dict[p1].append(1)  # winner won
@@ -247,15 +246,17 @@ for idx, row in df.iterrows():
 features = df[[
     "higher_id",
     "lower_id",
+    "higher_name",
+    "lower_name",
     "ranking_difference",
     "height_difference",
     "age_difference",
     "higher_hand",
     "lower_hand",
-    "player1_h2h_win_pct",
+    "higher_h2h_win_pct",
     "match_type", 
-    "player1_recent_win_pct",
-    "player2_recent_win_pct"
+    "higher_recent_win_pct",
+    "lower_recent_win_pct"
 ]]
 
 log_target = df["log_target"]
@@ -281,18 +282,16 @@ features = [
     "age_difference",
     "higher_hand",
     "lower_hand",
-    "player1_h2h_win_pct",
+    "higher_h2h_win_pct",
     "match_type",
-    "player1_recent_win_pct",
-    "player2_recent_win_pct"
+    "higher_recent_win_pct",
+    "lower_recent_win_pct"
 ]
 
 X = df[features]
 y = df["log_target"]
 
 scaler = StandardScaler()
-
-
 
 # --- 4. Split data ---
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -302,20 +301,18 @@ num_features = [
     "ranking_difference",
     "height_difference",
     "age_difference",
-    "player1_h2h_win_pct",
-    "player1_recent_win_pct",
-    "player2_recent_win_pct"
+    "higher_h2h_win_pct",
+    "higher_recent_win_pct",
+    "lower_recent_win_pct"
 ]
 
 x_scaled = scaler.fit_transform(X[num_features])
-
 
 cov_matrix = np.cov(x_scaled, rowvar=False)
 print("This is the covariance matrix")
 print(cov_matrix)
 
 cat_features = ["higher_hand", "lower_hand", "match_type"]
-
 
 X_train_num = scaler.fit_transform(X_train[num_features])
 X_test_num = scaler.transform(X_test[num_features])
