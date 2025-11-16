@@ -388,14 +388,16 @@ print("Outlier capping complete. Numeric features have been Winsorized.")
 
 scaler = StandardScaler()
 
-x_scaled = scaler.fit_transform(X)
+x_scaled = scaler.fit_transform(X[num_features])
+
+x_scaled_all = np.hstack([x_scaled, X[cat_features].values])
 
 cov_matrix = np.cov(x_scaled, rowvar=False)
 print("This is the covariance matrix")
 print(cov_matrix)
 
 # Pearson correlation matrix
-corr_matrix = df[num_features].corr(method="pearson")
+corr_matrix = pd.DataFrame(x_scaled).corr(method="pearson")
 
 # Heatmap
 plt.figure(figsize=(8,6))
@@ -405,7 +407,7 @@ plt.show()
 
 # --- 6. Apply PCA ---
 pca = PCA(n_components=5)
-X_pca = pca.fit_transform(x_scaled)
+X_pca = pca.fit_transform(x_scaled_all)
 
 print("Explained variance by PCA components:", pca.explained_variance_ratio_)
 
@@ -414,7 +416,7 @@ print("Starting LDA")
 # Create LDA object
 lda = LinearDiscriminantAnalysis(n_components=1)  # For binary target, max n_components = 1
 # Fit LDA on training data
-X_lda = lda.fit_transform(x_scaled, y)
+X_lda = lda.fit_transform(x_scaled_all, y)
 
 print("Shape of LDA-transformed training set:", X_lda.shape)
 print("Explained variance ratio (discriminative power):", lda.explained_variance_ratio_)
@@ -430,7 +432,7 @@ plt.show()
 
 #Single Value Decomposition
 print("Single Value Decomposition")
-# Use the already scaled training matrix (x_train_scaled)
+
 U, S, Vt = svd(x_scaled, full_matrices=False)
 
 print("Singular values:")
@@ -450,10 +452,9 @@ print("\nCondition number:", condition_number)
 
 #VIF
 print("Variance Inflation Factor (VIF)")
-vif_numerical = X[num_features].copy()
 
 # Add a constant column for statsmodels
-X_const = vif_numerical.copy()
+X_const = pd.DataFrame(x_scaled.copy())
 X_const["intercept"] = 1
 
 vif_df = pd.DataFrame()
@@ -466,10 +467,8 @@ vif_df = vif_df[vif_df.feature != "intercept"]
 print("\n===== VARIANCE INFLATION FACTOR (VIF) RESULTS =====")
 print(vif_df)
 
-
-
 # Build Random Forest model
-X_train, X_test, y_train, y_test = train_test_split(x_scaled, y, test_size=0.2, random_state=42, stratify=y)
+X_train, X_test, y_train, y_test = train_test_split(x_scaled_all, y, test_size=0.2, random_state=42, stratify=y)
 rf = RandomForestClassifier(
     n_estimators=300,
     max_depth=None,
