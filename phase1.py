@@ -347,15 +347,8 @@ features = [
     "lower_surface_ewma"
 ]
 
-X = df[features]
-y = df["log_target"]
+cat_features = ["higher_hand", "lower_hand", "match_type"]
 
-scaler = StandardScaler()
-
-# --- 4. Split data ---
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-
-# --- 5. Standardize numeric features ---
 num_features = [
     "ranking_difference",
     "height_difference",
@@ -365,10 +358,39 @@ num_features = [
     "lower_surface_ewma"
 ]
 
-x_train_scaled = scaler.fit_transform(X_train[num_features])
-X_test__scaled = scaler.transform(X_test[num_features])
+X = df[features]
+y = df["log_target"]
 
-cov_matrix = np.cov(x_train_scaled, rowvar=False)
+iqr_features = ["ranking_difference", "height_difference", "age_difference"]
+
+for col in iqr_features:
+    Q1 = df[col].quantile(0.25)
+    Q3 = df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    df[col] = np.where(df[col] < lower_bound, lower_bound, df[col])
+    df[col] = np.where(df[col] > upper_bound, upper_bound, df[col])
+
+# Optional: check the result
+plt.figure(figsize=(10,5))
+sns.boxplot(data=df[iqr_features])
+plt.title("After IQR Capping: Boxplot of Selected Features")
+plt.show()
+
+# Plot boxplots after capping
+plt.figure(figsize=(12,6))
+sns.boxplot(data=df[num_features])
+plt.title("After Outlier Capping: Boxplot of Numeric Features")
+plt.show()
+
+print("Outlier capping complete. Numeric features have been Winsorized.")
+
+scaler = StandardScaler()
+
+x_scaled = scaler.fit_transform(X)
+
+cov_matrix = np.cov(x_scaled, rowvar=False)
 print("This is the covariance matrix")
 print(cov_matrix)
 
@@ -381,16 +403,9 @@ sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", square=True)
 plt.title("Pearson Correlation Heatmap")
 plt.show()
 
-cat_features = ["higher_hand", "lower_hand", "match_type"]
-
-# Concatenate categorical features without scaling
-X_train_processed = np.hstack([x_train_scaled, X_train[cat_features].values])
-X_test_processed = np.hstack([X_test__scaled, X_test[cat_features].values])
-
 # --- 6. Apply PCA ---
 pca = PCA(n_components=5)
-X_train_pca = pca.fit_transform(X_train_processed)
-X_test_pca = pca.transform(X_test_processed)
+X_pca = pca.fit_transform(x_scaled)
 
 print("Explained variance by PCA components:", pca.explained_variance_ratio_)
 
@@ -399,23 +414,62 @@ print("Starting LDA")
 # Create LDA object
 lda = LinearDiscriminantAnalysis(n_components=1)  # For binary target, max n_components = 1
 # Fit LDA on training data
-X_train_lda = lda.fit_transform(X_train_processed, y_train)
+X_lda = lda.fit_transform(x_scaled, y)
 
-# Transform test data
-X_test_lda = lda.transform(X_test_processed)
-
-print("Shape of LDA-transformed training set:", X_train_lda.shape)
+print("Shape of LDA-transformed training set:", X_lda.shape)
 print("Explained variance ratio (discriminative power):", lda.explained_variance_ratio_)
 plt.figure(figsize=(8,4))
-plt.hist(X_train_lda[y_train==1], alpha=0.5, label='Higher Seed Wins (1)')
-plt.hist(X_train_lda[y_train==0], alpha=0.5, label='Lower Seed Wins (0)')
+plt.hist(X_lda[y==1], alpha=0.5, label='Higher Seed Wins (1)')
+plt.hist(X_lda[y==0], alpha=0.5, label='Lower Seed Wins (0)')
 plt.title("LDA Projection")
 plt.xlabel("LD1")
 plt.ylabel("Frequency")
 plt.legend()
 plt.show()
 
+
+#Single Value Decomposition
+print("Single Value Decomposition")
+# Use the already scaled training matrix (x_train_scaled)
+U, S, Vt = svd(x_scaled, full_matrices=False)
+
+print("Singular values:")
+print(S)
+
+# Compute explained variance ratio from singular values
+variance_explained = (S**2) / np.sum(S**2)
+print("\nVariance explained by each singular value (component):")
+print(variance_explained)
+
+print("\nCumulative variance explained:")
+print(np.cumsum(variance_explained))
+
+condition_number = S[0] / S[-1]
+print("\nCondition number:", condition_number)
+
+
+#VIF
+print("Variance Inflation Factor (VIF)")
+vif_numerical = X[num_features].copy()
+
+# Add a constant column for statsmodels
+X_const = vif_numerical.copy()
+X_const["intercept"] = 1
+
+vif_df = pd.DataFrame()
+vif_df["feature"] = X_const.columns
+vif_df["VIF"] = [variance_inflation_factor(X_const.values, i) for i in range(X_const.shape[1])]
+
+# Drop intercept row for readability
+vif_df = vif_df[vif_df.feature != "intercept"]
+
+print("\n===== VARIANCE INFLATION FACTOR (VIF) RESULTS =====")
+print(vif_df)
+
+
+
 # Build Random Forest model
+X_train, X_test, y_train, y_test = train_test_split(x_scaled, y, test_size=0.2, random_state=42, stratify=y)
 rf = RandomForestClassifier(
     n_estimators=300,
     max_depth=None,
@@ -436,50 +490,15 @@ print("\nClassification Report:\n", classification_report(y_test, y_pred_rf))
 
 # Feature importance ranking
 importances = rf.feature_importances_
+
+feature_names_rf = num_features + cat_features
+print(len(importances))
+print(importances)
+print(len(feature_names_rf))
 feature_importance_df = pd.DataFrame({
-    "Feature": X.columns,
+    "Feature": feature_names_rf,
     "Importance": importances
 }).sort_values(by="Importance", ascending=False)
 
 print("\n===== RANDOM FOREST FEATURE IMPORTANCE =====")
 print(feature_importance_df)
-
-#Single Value Decomposition
-print("Single Value Decomposition")
-# Use the already scaled training matrix (x_train_scaled)
-U, S, Vt = svd(x_train_scaled, full_matrices=False)
-
-print("Singular values:")
-print(S)
-
-# Compute explained variance ratio from singular values
-variance_explained = (S**2) / np.sum(S**2)
-print("\nVariance explained by each singular value (component):")
-print(variance_explained)
-
-print("\nCumulative variance explained:")
-print(np.cumsum(variance_explained))
-
-condition_number = S[0] / S[-1]
-print("\nCondition number:", condition_number)
-
-
-#VIF
-print("Variance Inflation Factor (VIF)")
-# Replace X with your actual feature DataFrame
-# Make sure it contains only numeric feature columns — no target variable
-X = df[num_features].copy()
-
-# Add a constant column for statsmodels
-X_const = X.copy()
-X_const["intercept"] = 1
-
-vif_df = pd.DataFrame()
-vif_df["feature"] = X_const.columns
-vif_df["VIF"] = [variance_inflation_factor(X_const.values, i) for i in range(X_const.shape[1])]
-
-# Drop intercept row for readability
-vif_df = vif_df[vif_df.feature != "intercept"]
-
-print("\n===== VARIANCE INFLATION FACTOR (VIF) RESULTS =====")
-print(vif_df)
