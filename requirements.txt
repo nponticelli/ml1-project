@@ -26,3 +26,4 @@ statsmodels==0.14.5
 threadpoolctl==3.6.0
 tornado @ file:///work/buildout/croot/tornado_1759952458497/work
 tzdata==2025.2
+shap

@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
 import re
-from sklearn.preprocessing import StandardScaler
+
+from sklearn.inspection import permutation_importance
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
 from collections import defaultdict
 import matplotlib.pyplot as plt
 from numpy.linalg import svd
@@ -317,207 +319,167 @@ def data_cleaning():
     print("Saved fe_simplified.csv", fe.shape)
 
     return fe
+def feature_engineering_option_c():
 
-
-
-def feature_engineering():
-    # --- 1. Load dataset for LDA and PCA ---
-    df = pd.read_csv("fe_matches.csv")  # assuming you've saved it with all features
+    # ---------------------------------------
+    # 1. Load dataset
+    # ---------------------------------------
+    df = pd.read_csv("fe_simplified.csv")
     df = df.sort_values("pseudo_date").reset_index(drop=True)
-    # --- 3. Select features ---
-    features = [
-        "ranking_difference",
-        "height_difference",
-        "age_difference",
-        "higher_hand",
-        "lower_hand",
-        "higher_h2h_win_pct",
-        "match_type",
+
+    # Drop first 3000 rows for warm-up period
+    df = df.iloc[3000:].reset_index(drop=True)
+    print("After warm-up drop:", df.shape)
+
+    # ---------------------------------------
+    # 2. Select Features
+    # ---------------------------------------
+    # Keep only the features you defined
+    FEATURES_NUM = [
+        "higher_elo",
+        "lower_elo",
+        "elo_difference",
         "higher_surface_ewma",
         "lower_surface_ewma",
-        "elo_difference",
         "higher_short_fatigue",
-        "lower_short_fatigue",
-        "higher_long_fatigue",
-        "lower_long_fatigue",
+        "lower_short_fatigue"
     ]
 
-    cat_features = ["match_type", "higher_hand", "lower_hand"]
+    FEATURES_CAT = ["age_advantage"]  # 3-category feature
 
-    num_features = [
-        "ranking_difference",
-        "height_difference",
-        "age_difference",
-        "higher_h2h_win_pct",
-        "higher_surface_ewma",
-        "lower_surface_ewma",
-        "elo_difference",
-        "higher_short_fatigue",
-        "lower_short_fatigue",
-        "higher_long_fatigue",
-        "lower_long_fatigue",
-    ]
+    TARGET = "log_target"
 
-    X = df[features]
-    y = df["log_target"]
+    X = df[FEATURES_NUM + FEATURES_CAT].copy()
+    y = df[TARGET].copy()
 
-    iqr_features = ["ranking_difference", "height_difference", "age_difference", "elo_difference"]
+    print("Selected feature matrix shape:", X.shape)
 
-    for col in iqr_features:
-        Q1 = df[col].quantile(0.25)
-        Q3 = df[col].quantile(0.75)
+    # ---------------------------------------
+    # 3. Handle Outliers (IQR Winsorization)
+    # ---------------------------------------
+    IQR_cap = ["higher_elo", "lower_elo", "elo_difference"]
+
+    for col in IQR_cap:
+        Q1, Q3 = X[col].quantile([0.25, 0.75])
         IQR = Q3 - Q1
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
-        df[col] = np.where(df[col] < lower_bound, lower_bound, df[col])
-        df[col] = np.where(df[col] > upper_bound, upper_bound, df[col])
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+        X[col] = X[col].clip(lower, upper)
 
-    # Optional: check the result
-    plt.figure(figsize=(10,5))
-    sns.boxplot(data=df[iqr_features])
-    plt.title("After IQR Capping: Boxplot of Selected Features")
-    plt.show()
+    print("Finished outlier winsorization.")
 
-    # Plot boxplots after capping
-    plt.figure(figsize=(12,6))
-    sns.boxplot(data=df[num_features])
-    plt.title("After Outlier Capping: Boxplot of Numeric Features")
-    plt.show()
+    # ---------------------------------------
+    # 4. Encode categorical features
+    # ---------------------------------------
+    # Three outcomes → OneHotEncode to avoid ordinality
+    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+    X_cat = encoder.fit_transform(X[FEATURES_CAT])
+    cat_feature_names = encoder.get_feature_names_out(FEATURES_CAT)
 
-    print("Outlier capping complete. Numeric features have been Winsorized.")
-
-    # Build Random Forest model
-    cutoff_idx = int(len(df) * 0.8)
-
-    # Chronological split
-    X_train = X.iloc[:cutoff_idx]
-    y_train = y.iloc[:cutoff_idx]
-
-    X_test = X.iloc[cutoff_idx:]
-    y_test = y.iloc[cutoff_idx:]
-
+    # ---------------------------------------
+    # 5. Scale numerical features
+    # ---------------------------------------
     scaler = StandardScaler()
+    X_num_scaled = scaler.fit_transform(X[FEATURES_NUM])
 
-    x_num_train_scaled = scaler.fit_transform(X_train[num_features])
+    # ---------------------------------------
+    # 6. Combine into full feature matrix
+    # ---------------------------------------
+    X_full = np.hstack([X_num_scaled, X_cat])
+    full_feature_list = FEATURES_NUM + list(cat_feature_names)
+    print("Final feature matrix:", X_full.shape)
 
-    x_train_scaled = np.hstack([x_num_train_scaled, X_train[cat_features].values])
+    # ---------------------------------------
+    # 7. Covariance matrix (numerical only)
+    # ---------------------------------------
+    cov_matrix = np.cov(X_num_scaled, rowvar=False)
+    print("\nCovariance Matrix (Numerical Features Only):")
+    print(pd.DataFrame(cov_matrix, index=FEATURES_NUM, columns=FEATURES_NUM))
 
-
-
-    cov_matrix = np.cov(x_num_train_scaled, rowvar=False)
-    print("This is the covariance matrix")
-    print(cov_matrix)
-
-    x_train_scaled_with_labels = pd.DataFrame(x_train_scaled, columns=num_features)
-
-
-
-
-    # Pearson correlation matrix
-    corr_matrix = pd.DataFrame(x_train_scaled_with_labels).corr(method="pearson")
-
-    # Heatmap
-    plt.figure(figsize=(8,6))
-    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", square=True)
-    plt.title("Pearson Correlation Heatmap")
+    # ---------------------------------------
+    # 8. Pearson correlation matrix
+    # ---------------------------------------
+    corr_matrix = pd.DataFrame(X_num_scaled, columns=FEATURES_NUM).corr()
+    plt.figure(figsize=(7, 5))
+    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
+    plt.title("Pearson Correlation — Numerical Features")
     plt.show()
 
-    # --- 6. Apply PCA ---
+    # ---------------------------------------
+    # 9. Chronological train/test split
+    # ---------------------------------------
+    cutoff = int(len(X_full) * 0.8)
+    X_train, X_test = X_full[:cutoff], X_full[cutoff:]
+    y_train, y_test = y[:cutoff], y[cutoff:]
+
+    print("Train:", X_train.shape, " Test:", X_test.shape)
+
+    # ---------------------------------------
+    # 10. PCA (numerical only)
+    # ---------------------------------------
     pca = PCA(n_components=5)
-    X_pca = pca.fit_transform(x_train_scaled_with_labels)
+    X_pca = pca.fit_transform(X_num_scaled)
+    print("\nPCA explained variance ratio:", pca.explained_variance_ratio_)
 
-    print("Explained variance by PCA components:", pca.explained_variance_ratio_)
+    # ---------------------------------------
+    # 11. LDA (full feature set)
+    # ---------------------------------------
+    lda = LinearDiscriminantAnalysis(n_components=1)
+    X_lda = lda.fit_transform(X_full, y)
 
-    # --- 7. Apply LDA ---
-    print("Starting LDA")
-    # Create LDA object
-    lda = LinearDiscriminantAnalysis(n_components=1)  # For binary target, max n_components = 1
-    # Fit LDA on training data
-    X_lda = lda.fit_transform(x_train_scaled_with_labels, y)
+    print("LDA explained variance:", lda.explained_variance_ratio_)
 
-    print("Shape of LDA-transformed training set:", X_lda.shape)
-    print("Explained variance ratio (discriminative power):", lda.explained_variance_ratio_)
     plt.figure(figsize=(8,4))
-    plt.hist(X_lda[y==1], alpha=0.5, label='Higher Seed Wins (1)')
-    plt.hist(X_lda[y==0], alpha=0.5, label='Lower Seed Wins (0)')
-    plt.title("LDA Projection")
-    plt.xlabel("LD1")
-    plt.ylabel("Frequency")
+    plt.hist(X_lda[y == 1], alpha=.5, label="Higher seed wins (1)")
+    plt.hist(X_lda[y == 0], alpha=.5, label="Lower seed wins (0)")
     plt.legend()
+    plt.title("LDA projection (LD1)")
     plt.show()
 
-    #Single Value Decomposition
-    print("Single Value Decomposition")
-
-    U, S, Vt = svd(x_num_train_scaled, full_matrices=False)
-
-    print("Singular values:")
-    print(S)
-
-    # Compute explained variance ratio from singular values
-    variance_explained = (S**2) / np.sum(S**2)
-    print("\nVariance explained by each singular value (component):")
-    print(variance_explained)
-
-    print("\nCumulative variance explained:")
-    print(np.cumsum(variance_explained))
-
-    condition_number = S[0] / S[-1]
-    print("\nCondition number:", condition_number)
-
-    #VIF
-    print("Variance Inflation Factor (VIF)")
-
-    # Add a constant column for statsmodels
-    X_const = pd.DataFrame(x_num_train_scaled.copy())
-    X_const["intercept"] = 1
-
-    vif_df = pd.DataFrame()
-    vif_df["feature"] = X_const.columns
-    vif_df["VIF"] = [variance_inflation_factor(X_const.values, i) for i in range(X_const.shape[1])]
-
-    # Drop intercept row for readability
-    vif_df = vif_df[vif_df.feature != "intercept"]
-
-    print("\n===== VARIANCE INFLATION FACTOR (VIF) RESULTS =====")
-    print(vif_df)
-
+    # ---------------------------------------
+    # 12. Random Forest classifier
+    # ---------------------------------------
     rf = RandomForestClassifier(
         n_estimators=300,
         max_depth=None,
         min_samples_split=5,
         min_samples_leaf=3,
-        class_weight="balanced",   # handles imbalance without resampling
+        class_weight="balanced",
         random_state=42,
-        n_jobs=-1
+        n_jobs=-1,
     )
 
     rf.fit(X_train, y_train)
+    y_pred = rf.predict(X_test)
 
-    # Predictions
-    y_pred_rf = rf.predict(X_test)
+    print("\nRandom Forest Accuracy:", accuracy_score(y_test, y_pred))
+    print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
-    print("Random Forest Accuracy:", accuracy_score(y_test, y_pred_rf))
-    print("\nClassification Report:\n", classification_report(y_test, y_pred_rf))
+    # ---------------------------------------
+    # 13. Feature importance
+    # ---------------------------------------
+    importance = rf.feature_importances_
+    fi_df = pd.DataFrame({
+        "Feature": full_feature_list,
+        "Importance": importance
+    }).sort_values("Importance", ascending=False)
 
-    # Feature importance ranking
-    importances = rf.feature_importances_
+    print("\nRandom Forest Feature Importances:")
+    print(fi_df)
 
-    feature_names_rf = num_features + cat_features
-    print(len(importances))
-    print(importances)
-    print(len(feature_names_rf))
-    feature_importance_df = pd.DataFrame({
-        "Feature": feature_names_rf,
-        "Importance": importances
-    }).sort_values(by="Importance", ascending=False)
+    return {
+        "X_train": X_train,
+        "X_test": X_test,
+        "y_train": y_train,
+        "y_test": y_test,
+        "rf": rf,
+        "scaler": scaler,
+        "encoder": encoder,
+        "feature_names": full_feature_list
+    }
 
-    print("\n===== RANDOM FOREST FEATURE IMPORTANCE =====")
-    print(feature_importance_df)
-
-    #Use PCA and then do logistic regression
 
 
 if __name__ == '__main__':
-    data_cleaning()
-    #feature_engineering()
+    #data_cleaning()
+    feature_engineering_option_c()
