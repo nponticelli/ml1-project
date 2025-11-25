@@ -47,4 +47,49 @@ Random Forest Feature Importances:
 
 Run #2
 
+After warm-up drop: (71906, 22)
+Selected feature matrix shape: (71906, 7)
+Finished outlier winsorization.
+Final feature matrix: (71906, 9)
+
+Covariance Matrix (Numerical Features Only):
+                      lower_global_elo  global_elo_diff  lower_surface_elo  surface_elo_diff  higher_short_fatigue  lower_short_fatigue
+lower_global_elo              1.000014        -0.134485           0.887388         -0.050405              0.364084             0.540715
+global_elo_diff              -0.134485         1.000014          -0.133044          0.807332              0.127281             0.082526
+lower_surface_elo             0.887388        -0.133044           1.000014         -0.202956              0.338873             0.500569
+surface_elo_diff             -0.050405         0.807332          -0.202956          1.000014              0.135408             0.103734
+higher_short_fatigue          0.364084         0.127281           0.338873          0.135408              1.000014             0.525590
+lower_short_fatigue           0.540715         0.082526           0.500569          0.103734              0.525590             1.000014
+Train: (57524, 9)  Test: (14382, 9)
+
+PCA explained variance ratio: [0.435157   0.31882347 0.12356315 0.07233725 0.03956795]
+LDA explained variance: [1.]
+
+Random Forest Accuracy: 0.6324572382144347
+
+Classification Report:
+               precision    recall  f1-score   support
+
+           0       0.49      0.38      0.43      5184
+           1       0.69      0.77      0.73      9198
+
+    accuracy                           0.63     14382
+   macro avg       0.59      0.58      0.58     14382
+weighted avg       0.62      0.63      0.62     14382
+
+
+Random Forest Feature Importances:
+                                   Feature  Importance
+1                          global_elo_diff    0.229791
+3                         surface_elo_diff    0.207041
+0                         lower_global_elo    0.166622
+2                        lower_surface_elo    0.164572
+4                     higher_short_fatigue    0.108790
+5                      lower_short_fatigue    0.102631
+8           age_advantage_no_age_advantage    0.008883
+6  age_advantage_higher_seed_age_advantage    0.006335
+7   age_advantage_lower_seed_age_advantage    0.005335
+
+Run #3
+
 
