@@ -16,6 +16,57 @@ def data_cleaning():
 
     df = pd.read_csv("atp_matches.csv")
 
+    print("This is thet start, and the head of the dataset")
+    print(df.head())
+
+    print("\nMissing values per column:")
+    print(df.isnull().sum())
+
+    print("\nWe are now cleaning the dataset")
+
+    num_duplicates = df.duplicated().sum()
+    print(f"Number of duplicate rows: {num_duplicates}")
+
+    print("Convert rankings to numeric, and fill blanks with max value (unranked players should be ranked lowly)")
+    for col in ["winner_rank", "loser_rank"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    for col in ["winner_rank", "loser_rank"]:
+        max_rank = df[col].max(skipna=True)
+        df[col] = df[col].fillna(max_rank)
+
+    print("\nMissing surface will be the mode")
+    df['surface'] = df['surface'].fillna(df['surface'].mode()[0])
+    for col in ["winner_hand", "loser_hand"]:
+        # Compute mode ignoring NaNs
+        mode_value = df[col].mode()[0]
+        # Replace anything not 'R' or 'L' with mode
+        df[col] = df[col].apply(lambda x: x if x in ['R', 'L'] else mode_value)
+
+    print("We want to clean the score column to calculate games difference")
+
+    print("\nSeeding, entry, rank, and points will be N/A if missing")
+    seed_entry_rank_cols = ['winner_seed', 'loser_seed',
+                            'winner_entry', 'loser_entry',
+                            'winner_rank_points',
+                            'loser_rank_points']
+    df[seed_entry_rank_cols] = df[seed_entry_rank_cols].fillna('N/A')
+
+    missing_after = df.isnull().sum()
+    print(missing_after)
+
+    num_duplicates = df.duplicated().sum()
+    print(f"Number of duplicate rows: {num_duplicates}")
+
+    print(df.info())
+
+    print(df.describe())
+
+    # Now we are going to feature engineer columns
+    # --- Basic cleaning ---
+    df = df.dropna(subset=["winner_id", "loser_id"])
+    #New Code
+
     df["tourney_date"] = pd.to_datetime(df["tourney_date"], format="%Y%m%d", errors="coerce")
     df = df.sort_values(["tourney_date", "match_num"])
 
@@ -46,18 +97,35 @@ def data_cleaning():
     df["clean_score"] = df["score"].apply(clean_score)
     df["game_diff"] = df["clean_score"].apply(compute_game_diff)
 
+    print("\nAll other columns (game statistical measures) will be the mean of the respective feature")
+    numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
+    numeric_cols_to_fill = [col for col in numeric_cols if col not in seed_entry_rank_cols]
+    df[numeric_cols_to_fill] = df[numeric_cols_to_fill].fillna(df[numeric_cols_to_fill].mean())
+
     # Reorder players by ranking
     def reorder(row):
         if row["winner_rank"] < row["loser_rank"]:
             return pd.Series({
                 "higher_id": row["winner_id"],
+                "higher_rank": row["winner_rank"],
+                "higher_name": row["winner_name"],
                 "lower_id": row["loser_id"],
+                "lower_rank": row["loser_rank"],
+                "lower_name": row["loser_name"],
+                "higher_age": row["winner_age"],
+                "lower_age": row["loser_age"],
                 "log_target": 1
             })
         else:
             return pd.Series({
                 "higher_id": row["loser_id"],
+                "higher_rank": row["loser_rank"],
+                "higher_name": row["loser_name"],
                 "lower_id": row["winner_id"],
+                "lower_rank": row["winner_rank"],
+                "lower_name": row["winner_name"],
+                "higher_age": row["loser_age"],
+                "lower_age": row["winner_age"],
                 "log_target": 0
             })
 
@@ -97,7 +165,7 @@ def data_cleaning():
     # 2) SURFACE EWMA
     # -------------------------------
 
-    α = 0.2
+    alpha_value = 0.2
     min_matches = 3
     neutral = 0.5
 
@@ -118,12 +186,12 @@ def data_cleaning():
         df.at[idx, "lower_surface_ewma"] = L["score"] / L["weight"] if L["count"] >= min_matches else neutral
 
         # update AFTER
-        H["score"] += (1 if winner == hi else 0) * α
-        H["weight"] += α
+        H["score"] += (1 if winner == hi else 0) * alpha_value
+        H["weight"] += alpha_value
         H["count"] += 1
 
-        L["score"] += (1 if winner == lo else 0) * α
-        L["weight"] += α
+        L["score"] += (1 if winner == lo else 0) * alpha_value
+        L["weight"] += alpha_value
         L["count"] += 1
 
     # -------------------------------
@@ -155,10 +223,39 @@ def data_cleaning():
         player_hist[hi].append((date, row["minutes"]))
         player_hist[lo].append((date, row["minutes"]))
 
+    all_ages = pd.concat([df["winner_age"], df["loser_age"]])
+    mean_age = all_ages.mean()
+    std_age = all_ages.std()
+    print("Mean age:", mean_age)
+    print("Standard deviation of age:", std_age)
+
+    df["higher_dev"] = abs(df["higher_age"] - mean_age)
+    df["lower_dev"] = abs(df["lower_age"] - mean_age)
+
+    df["age_dev_diff"] = df["lower_dev"] - df["higher_dev"]
+
+    def compute_age_adv(row):
+        if row["age_dev_diff"] > std_age:
+            return "higher_seed_age_advantage"
+        elif row["age_dev_diff"] < -std_age:
+            return "lower_seed_age_advantage"
+        else:
+            return "no_age_advantage"
+
+    df["age_advantage"] = df.apply(compute_age_adv, axis=1)
+
     # Final dataset
     fe = df[[
+        "pseudo_date",
         "higher_id",
+        "higher_name",
+        "higher_rank",
+        "higher_age",
         "lower_id",
+        "lower_rank",
+        "lower_name",
+        "lower_age",
+        "age_advantage",
         "higher_elo",
         "lower_elo",
         "elo_difference",
