@@ -194,12 +194,55 @@ def data_cleaning():
         L["weight"] += alpha_value
         L["count"] += 1
 
+
+
+
+
     # -------------------------------
     # 3) SHORT-TERM FATIGUE (< 10 days)
     # -------------------------------
 
-    df["pseudo_date"] = df["tourney_date"]
-    df = df.sort_values("pseudo_date")
+    #Calculate the exact date of the tournament to better calculate fatigue
+
+    # --- pseudo_date: add 1 day per extra match (2 days for GS) ---
+    grand_slam_names = {"Wimbledon", "Roland Garros", "Australian Open", "US Open"}
+
+    # ensure tourney_date is datetime already
+    df['tourney_date'] = pd.to_datetime(df['tourney_date'], format='%Y%m%d', errors='coerce')
+
+    # initialize pseudo_date and tournament-count tracker
+    df['pseudo_date'] = df['tourney_date']
+    tourney_dict = defaultdict(lambda: defaultdict(int))  # tourney_id -> (player_id -> count)
+
+    # iterate in tournament / date order so counts are prior-appearance counts
+    for idx, row in df.sort_values(['tourney_date', 'match_num']).iterrows():
+        tid = row['tourney_id']
+        winner = row['winner_id']
+        loser = row['loser_id']
+
+        # defensively get tourney_name (empty string if missing)
+        tourney_name = row.get('tourney_name', "") if isinstance(row, dict) else row.get('tourney_name',
+                                                                                         row.get('tourney_name', ""))
+
+        # determine per-prior-match increment (2 days for GS, else 1 day)
+        is_gs = str(tourney_name) in grand_slam_names
+        day_increment = 2 if is_gs else 1
+
+        # how many times each player has appeared earlier in this tournament
+        count_w = tourney_dict[tid].get(winner, 0)
+        count_l = tourney_dict[tid].get(loser, 0)
+        max_prior = max(count_w, count_l)
+
+        # assign pseudo_date using prior-appearance count
+        df.at[idx, 'pseudo_date'] = row['tourney_date'] + pd.Timedelta(days=day_increment * max_prior)
+
+        # now increment the appearance counts (so next match for the same player is considered "prior")
+        tourney_dict[tid][winner] = max_prior + 1
+        tourney_dict[tid][loser] = max_prior + 1
+
+    # finalize pseudo_date dtype and re-sort dataset chronologically by pseudo_date
+    df['pseudo_date'] = pd.to_datetime(df['pseudo_date'], errors='coerce')
+    df = df.sort_values('pseudo_date').reset_index(drop=True)
 
     player_hist = defaultdict(list)  # (date, minutes)
     df["minutes"] = df.get("minutes", 60)
@@ -244,8 +287,11 @@ def data_cleaning():
 
     df["age_advantage"] = df.apply(compute_age_adv, axis=1)
 
+    df['tourney_prefix'] = df['tourney_id'].astype(str).str[:4] + "_" + df['tourney_name']
+
     # Final dataset
     fe = df[[
+        "tourney_prefix",
         "pseudo_date",
         "higher_id",
         "higher_name",
