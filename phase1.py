@@ -13,70 +13,76 @@ from numpy.linalg import svd
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import seaborn as sns
 
-def data_cleaning():
-
+# ---------------------------------------
+# Master Cleaner
+# ---------------------------------------
+def load_raw_data():
     df = pd.read_csv("atp_matches.csv")
 
-    print("This is thet start, and the head of the dataset")
-    print(df.head())
-
-    print("\nMissing values per column:")
-    print(df.isnull().sum())
-
-    print("\nWe are now cleaning the dataset")
-
-    num_duplicates = df.duplicated().sum()
-    print(f"Number of duplicate rows: {num_duplicates}")
-
-    print("Convert rankings to numeric, and fill blanks with max value (unranked players should be ranked lowly)")
-    for col in ["winner_rank", "loser_rank"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    for col in ["winner_rank", "loser_rank"]:
-        max_rank = df[col].max(skipna=True)
-        df[col] = df[col].fillna(max_rank)
-
-    print("\nMissing surface will be the mode")
-    df['surface'] = df['surface'].fillna(df['surface'].mode()[0])
-    for col in ["winner_hand", "loser_hand"]:
-        # Compute mode ignoring NaNs
-        mode_value = df[col].mode()[0]
-        # Replace anything not 'R' or 'L' with mode
-        df[col] = df[col].apply(lambda x: x if x in ['R', 'L'] else mode_value)
-
-    print("We want to clean the score column to calculate games difference")
-
-    print("\nSeeding, entry, rank, and points will be N/A if missing")
-    seed_entry_rank_cols = ['winner_seed', 'loser_seed',
-                            'winner_entry', 'loser_entry',
-                            'winner_rank_points',
-                            'loser_rank_points']
-    df[seed_entry_rank_cols] = df[seed_entry_rank_cols].fillna('N/A')
-
-    missing_after = df.isnull().sum()
-    print(missing_after)
-
-    num_duplicates = df.duplicated().sum()
-    print(f"Number of duplicate rows: {num_duplicates}")
-
-    print(df.info())
-
-    print(df.describe())
-
-    # Now we are going to feature engineer columns
-    # --- Basic cleaning ---
-    df = df.dropna(subset=["winner_id", "loser_id"])
-    #New Code
-
-    df["tourney_date"] = pd.to_datetime(df["tourney_date"], format="%Y%m%d", errors="coerce")
-    df = df.sort_values(["tourney_date", "match_num"])
-
-    # Convert rankings
+    # convert ranking to numeric early
     for col in ["winner_rank", "loser_rank"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
         df[col] = df[col].fillna(df[col].max())
 
-    # Clean score -> game difference target
+    # fill surfaces and handedness
+    df["surface"] = df["surface"].fillna(df["surface"].mode()[0])
+    for col in ["winner_hand", "loser_hand"]:
+        mode_val = df[col].mode()[0]
+        df[col] = df[col].apply(lambda x: x if x in ["R", "L"] else mode_val)
+
+    # seed/entry/points missing → "N/A"
+    seed_cols = [
+        'winner_seed', 'loser_seed',
+        'winner_entry', 'loser_entry',
+        'winner_rank_points', 'loser_rank_points'
+    ]
+    df[seed_cols] = df[seed_cols].fillna("N/A")
+
+    # date format
+    df["tourney_date"] = pd.to_datetime(
+        df["tourney_date"], format="%Y%m%d", errors="coerce"
+    )
+
+    return df
+
+def clean_basic_fields(df):
+    """Standardizes core columns: converts dtypes, cleans hand, surface,
+    seed formats, ranking fields, match times, and score strings."""
+
+    # --- Date and numeric casting ---
+    df["tourney_date"] = pd.to_datetime(df["tourney_date"], errors="coerce")
+    df["tourney_id"] = df["tourney_id"].astype(str)
+    df["minutes"] = pd.to_numeric(df["minutes"], errors="coerce")
+
+    # --- Handedness normalization: R, L, U (Unknown), N (Unknown?) ---
+    df["winner_hand"] = df["winner_hand"].fillna("U").replace("N", "U")
+    df["loser_hand"] = df["loser_hand"].fillna("U").replace("N", "U")
+
+    # --- Surface cleaning ---
+    df["surface"] = df["surface"].fillna("Unknown")
+
+    # --- Seed and ranking normalizations ---
+    df["winner_seed"] = df["winner_seed"].fillna(-1)
+    df["loser_seed"] = df["loser_seed"].fillna(-1)
+    df["winner_rank"] = df["winner_rank"].fillna(df["winner_rank"].max())
+    df["loser_rank"] = df["loser_rank"].fillna(df["loser_rank"].max())
+
+    # --- Clean awkward formats like "34/45" or "45, 3" ---
+    for col in ["player_height", "winner_ht", "loser_ht"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(
+                df[col]
+                .astype(str)
+                .str.replace(",", "")
+                .str.replace("/", "")
+                .str.extract(r"(\d+)", expand=False),
+                errors="coerce",
+            )
+
+    return df
+
+def clean_score_fields(df):
+
     def clean_score(s):
         if pd.isna(s): return ""
         s = s.upper()
@@ -98,12 +104,10 @@ def data_cleaning():
     df["clean_score"] = df["score"].apply(clean_score)
     df["game_diff"] = df["clean_score"].apply(compute_game_diff)
 
-    print("\nAll other columns (game statistical measures) will be the mean of the respective feature")
-    numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
-    numeric_cols_to_fill = [col for col in numeric_cols if col not in seed_entry_rank_cols]
-    df[numeric_cols_to_fill] = df[numeric_cols_to_fill].fillna(df[numeric_cols_to_fill].mean())
+    return df
 
-    # Reorder players by ranking
+def create_rank_order_features(df):
+
     def reorder(row):
         if row["winner_rank"] < row["loser_rank"]:
             return pd.Series({
@@ -131,68 +135,45 @@ def data_cleaning():
             })
 
     df = pd.concat([df, df.apply(reorder, axis=1)], axis=1)
+    return df
 
-    # ---------------------------
-    # 1) ELO RATING SYSTEM
-    # ---------------------------
+def compute_elo_features(df):
 
-    # --- Hyperparams (tune as needed) ---
     BASE_ELO = 1500
-    K_global = 32  # how fast global ELO moves
-    K_surface = 24  # how fast surface ELO moves (usually <= K_global)
-    min_surface_matches = 3  # fall back to global ELO until this many surface matches exist
-    surface_weight = 0.6  # combined = surface_weight * surface_elo + (1-surface_weight) * global_elo
+    K_global = 32
+    K_surface = 24
+    min_surface_matches = 3
+    surface_weight = 0.6
 
-    # helpers
+    df = df.sort_values(["tourney_date", "match_num"])
+
+    global_elo = defaultdict(lambda: BASE_ELO)
+    surface_elo = defaultdict(lambda: BASE_ELO)
+    surface_count = defaultdict(int)
+
+    # preallocate columns
+    for col in [
+        "higher_global_elo", "lower_global_elo", "global_elo_diff",
+        "higher_surface_elo", "lower_surface_elo", "surface_elo_diff",
+        "higher_combined_elo", "lower_combined_elo", "combined_elo_diff"
+    ]:
+        df[col] = np.nan
+
     def expected(h, l):
-        return 1.0 / (1.0 + 10 ** ((l - h) / 400.0))
-
-    # initialize dictionaries
-    global_elo = defaultdict(lambda: BASE_ELO)  # player -> global elo
-    surface_elo = defaultdict(lambda: BASE_ELO)  # (player, surface) -> surface elo
-    surface_count = defaultdict(int)  # (player, surface) -> count of prior matches on surface
-
-    # create columns to store pre-match ratings and diffs
-    df["higher_global_elo"] = np.nan
-    df["lower_global_elo"] = np.nan
-    df["global_elo_diff"] = np.nan
-
-    df["higher_surface_elo"] = np.nan
-    df["lower_surface_elo"] = np.nan
-    df["surface_elo_diff"] = np.nan
-
-    df["higher_combined_elo"] = np.nan
-    df["lower_combined_elo"] = np.nan
-    df["combined_elo_diff"] = np.nan
-
-    # IMPORTANT: iterate in chronological order (use pseudo_date if that's your chronological column)
-    # df must be sorted prior to this loop:
-    # df = df.sort_values("pseudo_date").reset_index(drop=True)
+        return 1 / (1 + 10 ** ((l - h) / 400))
 
     for idx, row in df.iterrows():
-        hi = row["higher_id"]
-        lo = row["lower_id"]
-        surf = row.get("surface", None)  # surface string, e.g. 'Hard', 'Clay', etc.
-        outcome = row["log_target"]  # 1 if higher won, 0 otherwise
 
-        # --- retrieve pre-match global ELOs (these are what go into features) ---
-        h_global = global_elo[hi]
-        l_global = global_elo[lo]
+        hi, lo, surf = row["higher_id"], row["lower_id"], row["surface"]
+        outcome = row["log_target"]
 
-        # --- retrieve pre-match surface ELOs ---
-        # Use surface_count to decide whether to trust a dedicated surface ELO.
-        # If not enough surface matches, fallback to the player's current global ELO.
-        if surf is None or surface_count[(hi, surf)] < min_surface_matches:
-            h_surf = h_global
-        else:
-            h_surf = surface_elo[(hi, surf)]
+        h_global, l_global = global_elo[hi], global_elo[lo]
 
-        if surf is None or surface_count[(lo, surf)] < min_surface_matches:
-            l_surf = l_global
-        else:
-            l_surf = surface_elo[(lo, surf)]
+        # surface-level ELO (fallback logic)
+        h_surf = surface_elo[(hi, surf)] if surface_count[(hi, surf)] >= min_surface_matches else h_global
+        l_surf = surface_elo[(lo, surf)] if surface_count[(lo, surf)] >= min_surface_matches else l_global
 
-        # --- store the pre-match ratings into dataframe (features) ---
+        # store pre-match values
         df.at[idx, "higher_global_elo"] = h_global
         df.at[idx, "lower_global_elo"] = l_global
         df.at[idx, "global_elo_diff"] = h_global - l_global
@@ -201,122 +182,88 @@ def data_cleaning():
         df.at[idx, "lower_surface_elo"] = l_surf
         df.at[idx, "surface_elo_diff"] = h_surf - l_surf
 
-        # combined (weighted) version
-        h_combined = surface_weight * h_surf + (1.0 - surface_weight) * h_global
-        l_combined = surface_weight * l_surf + (1.0 - surface_weight) * l_global
-        df.at[idx, "higher_combined_elo"] = h_combined
-        df.at[idx, "lower_combined_elo"] = l_combined
-        df.at[idx, "combined_elo_diff"] = h_combined - l_combined
+        # combined
+        h_comb = surface_weight * h_surf + (1 - surface_weight) * h_global
+        l_comb = surface_weight * l_surf + (1 - surface_weight) * l_global
+        df.at[idx, "higher_combined_elo"] = h_comb
+        df.at[idx, "lower_combined_elo"] = l_comb
+        df.at[idx, "combined_elo_diff"] = h_comb - l_comb
 
-        # --- now update the ratings (use outcome and expected probabilities) ---
-        # update global ELO
-        exp_h_global = expected(h_global, l_global)
-        new_h_global = h_global + K_global * (outcome - exp_h_global)
-        new_l_global = l_global + K_global * ((1 - outcome) - (1 - exp_h_global))
+        # update ELOs
+        exp_global = expected(h_global, l_global)
+        global_elo[hi] += K_global * (outcome - exp_global)
+        global_elo[lo] += K_global * ((1 - outcome) - (1 - exp_global))
 
-        global_elo[hi] = new_h_global
-        global_elo[lo] = new_l_global
+        exp_surf = expected(h_surf, l_surf)
+        surface_elo[(hi, surf)] = h_surf + K_surface * (outcome - exp_surf)
+        surface_elo[(lo, surf)] = l_surf + K_surface * ((1 - outcome) - (1 - exp_surf))
 
-        # update surface ELOs (use separate expected on surface ratings)
-        # If the (player,surface) entry wasn't present, surface_elo initialized to BASE_ELO but we
-        # intentionally used global as pre-match value; still update surface_elo dict so it starts tracking.
-        exp_h_surf = expected(h_surf, l_surf)
-        new_h_surf = h_surf + K_surface * (outcome - exp_h_surf)
-        new_l_surf = l_surf + K_surface * ((1 - outcome) - (1 - exp_h_surf))
-
-        surface_elo[(hi, surf)] = new_h_surf
-        surface_elo[(lo, surf)] = new_l_surf
-
-        # increment surface counts AFTER using them for pre-match decision
         surface_count[(hi, surf)] += 1
         surface_count[(lo, surf)] += 1
 
-    #Now to we have calculated elo, we can calculate volatility
+    return df
 
+def compute_pseudo_dates(df):
+    grand_slams = {"Wimbledon", "Roland Garros", "Australian Open", "US Open"}
 
-    # -------------------------------
-    # 3) SHORT-TERM FATIGUE (< 10 days)
-    # -------------------------------
-
-    #Calculate the exact date of the tournament to better calculate fatigue
-
-    # --- pseudo_date: add 1 day per extra match (2 days for GS) ---
-    grand_slam_names = {"Wimbledon", "Roland Garros", "Australian Open", "US Open"}
-
-    # ensure tourney_date is datetime already
-    df['tourney_date'] = pd.to_datetime(df['tourney_date'], format='%Y%m%d', errors='coerce')
-
-    # initialize pseudo_date and tournament-count tracker
     df['pseudo_date'] = df['tourney_date']
-    tourney_dict = defaultdict(lambda: defaultdict(int))  # tourney_id -> (player_id -> count)
+    tourney_dict = defaultdict(lambda: defaultdict(int))
 
-    # iterate in tournament / date order so counts are prior-appearance counts
     for idx, row in df.sort_values(['tourney_date', 'match_num']).iterrows():
+
         tid = row['tourney_id']
-        winner = row['winner_id']
-        loser = row['loser_id']
+        winner, loser = row['winner_id'], row['loser_id']
 
-        # defensively get tourney_name (empty string if missing)
-        tourney_name = row.get('tourney_name', "") if isinstance(row, dict) else row.get('tourney_name',
-                                                                                         row.get('tourney_name', ""))
+        is_gs = str(row['tourney_name']) in grand_slams
+        inc = 2 if is_gs else 1
 
-        # determine per-prior-match increment (2 days for GS, else 1 day)
-        is_gs = str(tourney_name) in grand_slam_names
-        day_increment = 2 if is_gs else 1
+        c_w = tourney_dict[tid].get(winner, 0)
+        c_l = tourney_dict[tid].get(loser, 0)
+        prior = max(c_w, c_l)
 
-        # how many times each player has appeared earlier in this tournament
-        count_w = tourney_dict[tid].get(winner, 0)
-        count_l = tourney_dict[tid].get(loser, 0)
-        max_prior = max(count_w, count_l)
+        df.at[idx, 'pseudo_date'] = row['tourney_date'] + pd.Timedelta(days=inc * prior)
 
-        # assign pseudo_date using prior-appearance count
-        df.at[idx, 'pseudo_date'] = row['tourney_date'] + pd.Timedelta(days=day_increment * max_prior)
+        tourney_dict[tid][winner] = prior + 1
+        tourney_dict[tid][loser] = prior + 1
 
-        # now increment the appearance counts (so next match for the same player is considered "prior")
-        tourney_dict[tid][winner] = max_prior + 1
-        tourney_dict[tid][loser] = max_prior + 1
-
-    # finalize pseudo_date dtype and re-sort dataset chronologically by pseudo_date
-    df['pseudo_date'] = pd.to_datetime(df['pseudo_date'], errors='coerce')
     df = df.sort_values('pseudo_date').reset_index(drop=True)
+    return df
 
-    player_hist = defaultdict(list)  # (date, minutes)
+def compute_short_term_fatigue(df):
+    window = pd.Timedelta(days=10)
     df["minutes"] = df.get("minutes", 60)
 
     df["higher_short_fatigue"] = 0.0
-    df["lower_short_fatigue"]  = 0.0
+    df["lower_short_fatigue"] = 0.0
 
-    window = pd.Timedelta(days=10)
+    hist = defaultdict(list)
 
     for idx, row in df.iterrows():
         date = row["pseudo_date"]
-        hi, lo = row["higher_id"], row["lower_id"]
 
         def fatigue(p):
-            return sum(dur for d, dur in player_hist[p] if d >= date - window)
+            return sum(m for d, m in hist[p] if d >= date - window)
 
+        hi, lo = row["higher_id"], row["lower_id"]
         df.at[idx, "higher_short_fatigue"] = fatigue(hi)
-        df.at[idx, "lower_short_fatigue"]  = fatigue(lo)
+        df.at[idx, "lower_short_fatigue"] = fatigue(lo)
 
-        # update
-        player_hist[hi].append((date, row["minutes"]))
-        player_hist[lo].append((date, row["minutes"]))
+        hist[hi].append((date, row["minutes"]))
+        hist[lo].append((date, row["minutes"]))
 
-    #compute fatigue difference
     df["fatigue_diff"] = df["higher_short_fatigue"] - df["lower_short_fatigue"]
+    return df
 
+def compute_age_features(df):
     all_ages = pd.concat([df["winner_age"], df["loser_age"]])
-    mean_age = all_ages.mean()
-    std_age = all_ages.std()
-    print("Mean age:", mean_age)
-    print("Standard deviation of age:", std_age)
+    mean_age, std_age = all_ages.mean(), all_ages.std()
 
     df["higher_dev"] = abs(df["higher_age"] - mean_age)
     df["lower_dev"] = abs(df["lower_age"] - mean_age)
 
     df["age_dev_diff"] = df["lower_dev"] - df["higher_dev"]
 
-    def compute_age_adv(row):
+    def age_adv(row):
         if row["age_dev_diff"] > std_age:
             return "higher_seed_age_advantage"
         elif row["age_dev_diff"] < -std_age:
@@ -324,54 +271,63 @@ def data_cleaning():
         else:
             return "no_age_advantage"
 
-    df["age_advantage"] = df.apply(compute_age_adv, axis=1)
+    df["age_advantage"] = df.apply(age_adv, axis=1)
+    return df
+
+def create_tournament_features(df):
 
     df['tourney_prefix'] = df['tourney_id'].astype(str).str[:4] + "_" + df['tourney_name']
 
-    # ------------------------------------------------------------
-    # 2. GRAND SLAM INDICATOR
-    # ------------------------------------------------------------
     grand_slams = ["Australian Open", "Roland Garros", "Wimbledon", "US Open"]
     df["is_grand_slam"] = df["tourney_name"].isin(grand_slams).astype(int)
 
-    # Final dataset
-    fe = df[[
+    return df
+
+def export_final_dataset(df):
+
+    cols = [
         "tourney_prefix",
         "is_grand_slam",
         "surface",
         "pseudo_date",
-        "higher_id",
-        "higher_name",
-        "higher_rank",
-        "higher_age",
-        "lower_id",
-        "lower_rank",
-        "lower_name",
-        "lower_age",
+        "higher_id", "higher_name", "higher_rank", "higher_age",
+        "lower_id", "lower_name", "lower_rank", "lower_age",
         "age_advantage",
-        "higher_global_elo",
-        "lower_global_elo",
-        "global_elo_diff",
-        "higher_surface_elo",
-        "lower_surface_elo",
-        "surface_elo_diff",
-        "higher_short_fatigue",
-        "lower_short_fatigue",
-        "fatigue_diff",
+        "higher_global_elo", "lower_global_elo", "global_elo_diff",
+        "higher_surface_elo", "lower_surface_elo", "surface_elo_diff",
+        "higher_short_fatigue", "lower_short_fatigue", "fatigue_diff",
         "game_diff",
         "log_target"
-    ]]
+    ]
 
-    fe.to_csv("fe_simplified.csv", index=False)
-    print("Saved fe_simplified.csv", fe.shape)
+    fe = df[cols].copy()
+    fe.to_csv("fe_simplified_modular.csv", index=False)
 
+    print("Saved fe_simplified.csv with shape:", fe.shape)
     return fe
+
+
+def data_cleaning():
+
+    df = load_raw_data()
+    df = clean_basic_fields(df)
+    df = clean_score_fields(df)
+    df = create_rank_order_features(df)
+    df = compute_elo_features(df)
+    df = compute_pseudo_dates(df)
+    df = compute_short_term_fatigue(df)
+    df = compute_age_features(df)
+    df = create_tournament_features(df)
+    df = export_final_dataset(df)
+
+    return df
+
 def feature_engineering_option_c():
 
     # ---------------------------------------
     # 1. Load dataset
     # ---------------------------------------
-    df = pd.read_csv("fe_simplified.csv")
+    df = pd.read_csv("fe_simplified_modular.csv")
     df = df.sort_values("pseudo_date").reset_index(drop=True)
 
     # Drop first 3000 rows for warm-up period
