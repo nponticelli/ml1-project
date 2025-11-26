@@ -231,6 +231,9 @@ def data_cleaning():
         surface_count[(hi, surf)] += 1
         surface_count[(lo, surf)] += 1
 
+    #Now to we have calculated elo, we can calculate volatility
+
+
     # -------------------------------
     # 3) SHORT-TERM FATIGUE (< 10 days)
     # -------------------------------
@@ -299,6 +302,9 @@ def data_cleaning():
         player_hist[hi].append((date, row["minutes"]))
         player_hist[lo].append((date, row["minutes"]))
 
+    #compute fatigue difference
+    df["fatigue_diff"] = df["higher_short_fatigue"] - df["lower_short_fatigue"]
+
     all_ages = pd.concat([df["winner_age"], df["loser_age"]])
     mean_age = all_ages.mean()
     std_age = all_ages.std()
@@ -322,9 +328,16 @@ def data_cleaning():
 
     df['tourney_prefix'] = df['tourney_id'].astype(str).str[:4] + "_" + df['tourney_name']
 
+    # ------------------------------------------------------------
+    # 2. GRAND SLAM INDICATOR
+    # ------------------------------------------------------------
+    grand_slams = ["Australian Open", "Roland Garros", "Wimbledon", "US Open"]
+    df["is_grand_slam"] = df["tourney_name"].isin(grand_slams).astype(int)
+
     # Final dataset
     fe = df[[
         "tourney_prefix",
+        "is_grand_slam",
         "surface",
         "pseudo_date",
         "higher_id",
@@ -344,6 +357,7 @@ def data_cleaning():
         "surface_elo_diff",
         "higher_short_fatigue",
         "lower_short_fatigue",
+        "fatigue_diff",
         "game_diff",
         "log_target"
     ]]
