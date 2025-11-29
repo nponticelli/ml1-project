@@ -53,6 +53,8 @@ def clean_basic_fields(df):
     df["tourney_date"] = pd.to_datetime(df["tourney_date"], errors="coerce")
     df["tourney_id"] = df["tourney_id"].astype(str)
     df["minutes"] = pd.to_numeric(df["minutes"], errors="coerce")
+    df["winner_ht"] = df["winner_ht"].fillna(df["winner_ht"].median())
+    df["loser_ht"] = df["loser_ht"].fillna(df["loser_ht"].median())
 
     # --- Handedness normalization: R, L, U (Unknown), N (Unknown?) ---
     df["winner_hand"] = df["winner_hand"].fillna("U").replace("N", "U")
@@ -117,6 +119,7 @@ def create_rank_order_features(df):
                 "higher_id": row["winner_id"],
                 "higher_rank": row["winner_rank"],
                 "higher_name": row["winner_name"],
+                "higher_height": row["winner_ht"],
                 "higher_ace": row["w_ace"],
                 "higher_df": row["w_df"],
                 "higher_svpt": row["w_svpt"],
@@ -129,6 +132,7 @@ def create_rank_order_features(df):
                 "lower_id": row["loser_id"],
                 "lower_rank": row["loser_rank"],
                 "lower_name": row["loser_name"],
+                "lower_height": row["loser_ht"],
                 "lower_ace": row["l_ace"],
                 "lower_df": row["l_df"],
                 "lower_svpt": row["l_svpt"],
@@ -147,6 +151,7 @@ def create_rank_order_features(df):
                 "higher_id": row["loser_id"],
                 "higher_rank": row["loser_rank"],
                 "higher_name": row["loser_name"],
+                "higher_height": row["loser_ht"],
                 "higher_ace": row["l_ace"],
                 "higher_df": row["l_df"],
                 "higher_svpt": row["l_svpt"],
@@ -159,6 +164,7 @@ def create_rank_order_features(df):
                 "lower_id": row["winner_id"],
                 "lower_rank": row["winner_rank"],
                 "lower_name": row["winner_name"],
+                "lower_height": row["winner_ht"],
                 "lower_ace": row["w_ace"],
                 "lower_df": row["w_df"],
                 "lower_svpt": row["w_svpt"],
@@ -317,6 +323,10 @@ def compute_age_features(df):
     df["age_advantage"] = df.apply(age_adv, axis=1)
     return df
 
+def compute_height_features(df):
+    df['height_diff'] = df['higher_height'] - df['lower_height']
+    return df
+
 def create_tournament_features(df):
 
     df['tourney_prefix'] = df['tourney_id'].astype(str).str[:4] + "_" + df['tourney_name']
@@ -326,18 +336,18 @@ def create_tournament_features(df):
 
     return df
 
-def compute_service_advantage(df, window=5):
+def compute_service_stats(df, window=5):
     """
-    Compute higher_service_advantage and lower_service_advantage using
-    the last N matches for each player.
+    Compute higher_service_advantage, lower_service_advantage,
+    and weighted first serve percentage over last N matches for each player.
 
     Parameters
     ----------
     df : pd.DataFrame
         Must contain:
             - higher_id, lower_id
-            - higher_svpt, higher_1stWon, higher_2ndWon
-            - lower_svpt, lower_1stWon, lower_2ndWon
+            - higher_svpt, higher_1stIn, higher_1stWon, higher_2ndWon
+            - lower_svpt, lower_1stIn, lower_1stWon, lower_2ndWon
             - pseudo_date (datetime)
     window : int
         Number of past matches to use for rolling averages.
@@ -345,61 +355,96 @@ def compute_service_advantage(df, window=5):
     Returns
     -------
     df : pd.DataFrame
-        Adds two columns:
+        Adds the following columns:
             - higher_service_advantage
             - lower_service_advantage
+            - service_advantage_diff
+            - higher_first_serve_pct
+            - lower_first_serve_pct
     """
 
-    # Histories: list of tuples (points_won, points_total)
     service_hist = defaultdict(list)
     return_hist = defaultdict(list)
+    first_serve_hist = defaultdict(list)
 
     higher_adv = []
     lower_adv = []
+    higher_first_pct = []
+    lower_first_pct = []
 
     # Ensure chronological order
     df = df.sort_values('pseudo_date').reset_index(drop=True)
 
+    def weighted_pct(hist, player_id):
+        """Weighted rolling percentage with linear weights."""
+        last_matches = hist[player_id][-window:]
+        if not last_matches:
+            return 0.5
+        total_won = 0
+        total_pts = 0
+        for i, (won, pts) in enumerate(reversed(last_matches), 1):
+            weight = i
+            total_won += won * weight
+            total_pts += pts * weight
+        return total_won / total_pts if total_pts > 0 else 0.5
+
+    def weighted_first_serve_pct(hist, player_id):
+        """Weighted rolling first serve %."""
+        last_matches = hist[player_id][-window:]
+        if not last_matches:
+            return 0.65  # neutral default first serve %
+        total_first_in = 0
+        total_svpt = 0
+        for i, (first_in, svpt) in enumerate(reversed(last_matches), 1):
+            weight = i
+            total_first_in += first_in * weight
+            total_svpt += svpt * weight
+        return total_first_in / total_svpt if total_svpt > 0 else 0.65
+
     for idx, row in df.iterrows():
         hi, lo = row['higher_id'], row['lower_id']
 
-        # Current match service points
+        # Service points
         hi_service_won = row['higher_1stWon'] + row['higher_2ndWon']
         hi_service_total = row['higher_svpt']
-
         lo_service_won = row['lower_1stWon'] + row['lower_2ndWon']
         lo_service_total = row['lower_svpt']
 
-        # Return points (opponent's service minus points won)
+        # Return points
         hi_return_won = lo_service_total - lo_service_won
         lo_return_won = hi_service_total - hi_service_won
 
-        # Helper: rolling % calculation
-        def rolling_pct(hist, player_id):
-            last_matches = hist[player_id][-window:]
-            if not last_matches:
-                return 0.5  # neutral if no history
-            total_won = sum(h[0] for h in last_matches)
-            total_pts = sum(h[1] for h in last_matches)
-            return total_won / total_pts if total_pts > 0 else 0.5
+        # First serve
+        hi_first_in = row['higher_1stIn']
+        lo_first_in = row['lower_1stIn']
 
-        # Compute service advantage
-        higher_advantage = rolling_pct(service_hist, hi) - rolling_pct(return_hist, lo)
-        lower_advantage = rolling_pct(service_hist, lo) - rolling_pct(return_hist, hi)
+        # Compute advantages
+        higher_advantage = weighted_pct(service_hist, hi) - weighted_pct(return_hist, lo)
+        lower_advantage = weighted_pct(service_hist, lo) - weighted_pct(return_hist, hi)
 
         higher_adv.append(higher_advantage)
         lower_adv.append(lower_advantage)
 
-        # Update histories after using them for current match
+        higher_first_pct.append(weighted_first_serve_pct(first_serve_hist, hi))
+        lower_first_pct.append(weighted_first_serve_pct(first_serve_hist, lo))
+
+        # Update histories after current match
         service_hist[hi].append((hi_service_won, hi_service_total))
         service_hist[lo].append((lo_service_won, lo_service_total))
 
         return_hist[hi].append((hi_return_won, lo_service_total))
         return_hist[lo].append((lo_return_won, hi_service_total))
 
+        first_serve_hist[hi].append((hi_first_in, hi_service_total))
+        first_serve_hist[lo].append((lo_first_in, lo_service_total))
+
     df['higher_service_advantage'] = higher_adv
     df['lower_service_advantage'] = lower_adv
     df['service_advantage_diff'] = df['higher_service_advantage'] - df['lower_service_advantage']
+    df['higher_first_serve_pct'] = higher_first_pct
+    df['lower_first_serve_pct'] = lower_first_pct
+    df['first_serve_pct_diff'] = df['higher_first_serve_pct'] - df['lower_first_serve_pct']
+
 
     return df
 
@@ -412,16 +457,18 @@ def export_final_dataset(df):
         "pseudo_date",
         "higher_id", "higher_name", "higher_rank", "higher_age",
         "lower_id", "lower_name", "lower_rank", "lower_age",
+        "height_diff",
         "age_advantage",
         "age_diff_z",
         "higher_global_elo", "lower_global_elo", "global_elo_diff",
         "higher_surface_elo", "lower_surface_elo", "surface_elo_diff",
         "higher_short_fatigue", "lower_short_fatigue", "fatigue_diff",
-        "higher_service_advantage",
+        "higher_service_advantage", "higher_first_serve_pct",
         "higher_1stWon", "higher_2ndWon", "higher_svpt",
-        "lower_service_advantage",
+        "lower_service_advantage", "lower_first_serve_pct",
         "lower_1stWon", "lower_2ndWon","lower_svpt",
         "service_advantage_diff",
+        "first_serve_pct_diff",
         "game_diff",
         "log_target"
     ]
@@ -442,13 +489,14 @@ def data_cleaning():
     df = compute_pseudo_dates(df)
     df = compute_short_term_fatigue(df)
     df = compute_age_features(df)
+    df  = compute_height_features(df)
     df = create_tournament_features(df)
-    df = compute_service_advantage(df)
+    df = compute_service_stats(df)
     df = export_final_dataset(df)
 
     return df
 
-def feature_engineering_option_c():
+def feature_engineering():
 
     # ---------------------------------------
     # 1. Load dataset
@@ -472,6 +520,11 @@ def feature_engineering_option_c():
         "higher_service_advantage",
         "lower_service_advantage",
         "service_advantage_diff",
+        "lower_first_serve_pct",
+        "first_serve_pct_diff",''
+        "height_diff",
+        "lower_global_elo",
+        "global_elo_diff",
     ]
 
     FEATURES_CAT = ["age_advantage", "is_grand_slam", "surface"]  # 3-category feature
@@ -488,7 +541,8 @@ def feature_engineering_option_c():
     # ---------------------------------------
     IQR_cap = ["lower_surface_elo","surface_elo_diff", "fatigue_diff", "higher_service_advantage",
         "lower_service_advantage",
-        "service_advantage_diff", "age_diff_z"]
+        "service_advantage_diff", "age_diff_z", "lower_first_serve_pct", "first_serve_pct_diff", "height_diff", "lower_global_elo",
+        "global_elo_diff",]
 
     for col in IQR_cap:
         Q1, Q3 = X[col].quantile([0.25, 0.75])
@@ -611,7 +665,6 @@ def feature_engineering_option_c():
     }
 
 
-
 if __name__ == '__main__':
-    data_cleaning()
-    feature_engineering_option_c()
+    #data_cleaning()
+    feature_engineering()
