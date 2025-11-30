@@ -72,6 +72,18 @@ def clean_basic_fields(df):
     df["loser_age"] = df["loser_age"].fillna(df["loser_age"].median())
     df["winner_age"] = df["winner_age"].fillna(df["winner_age"].median())
 
+    cols_to_fill = [
+        "minutes",
+        "w_ace", "w_df", "w_svpt", "w_1stIn", "w_1stWon", "w_2ndWon", "w_SvGms", "w_bpSaved", "w_bpFaced",
+        "l_ace", "l_df", "l_svpt", "l_1stIn", "l_1stWon", "l_2ndWon", "l_SvGms", "l_bpSaved", "l_bpFaced"
+    ]
+
+    # Fill missing values with median for each column
+    for col in cols_to_fill:
+        df[col] = df[col].fillna(df[col].median())
+
+
+    df["round"] = df["round"].fillna(df["round"].mode())
 
     # --- Clean awkward formats like "34/45" or "45, 3" ---
     for col in ["player_height", "winner_ht", "loser_ht"]:
@@ -275,31 +287,53 @@ def compute_pseudo_dates(df):
     df = df.sort_values('pseudo_date').reset_index(drop=True)
     return df
 
-def compute_short_term_fatigue(df):
+def compute_fatigue(df):
     window = pd.Timedelta(days=10)
     df["minutes"] = df.get("minutes", 60)
 
     df["higher_short_fatigue"] = 0.0
     df["lower_short_fatigue"] = 0.0
 
+    df["higher_last_minutes"] = 0.0
+    df["lower_last_minutes"] = 0.0
+
     hist = defaultdict(list)
 
     for idx, row in df.iterrows():
         date = row["pseudo_date"]
+        hi, lo = row["higher_id"], row["lower_id"]
 
         def fatigue(p):
             return sum(m for d, m in hist[p] if d >= date - window)
 
-        hi, lo = row["higher_id"], row["lower_id"]
         df.at[idx, "higher_short_fatigue"] = fatigue(hi)
         df.at[idx, "lower_short_fatigue"] = fatigue(lo)
+
+        # --- NEW: LAST MATCH MINUTES WITHIN 3 DAYS ---
+        recent_limit = date - pd.Timedelta(days=3)
+
+        def last_match_minutes(p):
+            # look at previous matches only
+            matches = [ (d, m) for d, m in hist[p] if d < date ]
+            if not matches:
+                return 0
+            # most recent previous match
+            last_date, last_mins = matches[-1]
+            return last_mins if last_date >= recent_limit else 0
+
+        df.at[idx, "higher_last_minutes"] = last_match_minutes(hi)
+        df.at[idx, "lower_last_minutes"] = last_match_minutes(lo)
 
         hist[hi].append((date, row["minutes"]))
         hist[lo].append((date, row["minutes"]))
 
-    df["higher_short_fatigue"] = df["higher_short_fatigue"].fillna(0)
-    df["lower_short_fatigue"] = df["lower_short_fatigue"].fillna(0)
+    df.fillna(
+        {"higher_short_fatigue": 0, "lower_short_fatigue": 0,
+         "higher_last_minutes": 0, "lower_last_minutes": 0},
+        inplace=True
+    )
     df["fatigue_diff"] = df["higher_short_fatigue"] - df["lower_short_fatigue"]
+    df["last_minutes_diff"] = df["higher_last_minutes"] - df["lower_last_minutes"]
     return df
 
 def compute_age_features(df):
@@ -453,11 +487,98 @@ def feature_interactions(df):
 
     return df
 
+def compute_win_percentages(df):
+    # Ensure sorted by date
+    df = df.sort_values("pseudo_date").reset_index(drop=True)
+
+    # Track tournament-level wins/losses
+    tournament_stats = defaultdict(lambda: {"wins": 0, "losses": 0})
+
+    # Track round-level wins/losses
+    round_stats = defaultdict(lambda: {"wins": 0, "losses": 0})
+
+    # Global fallback win percentage
+    global_stats = defaultdict(lambda: {"wins": 0, "losses": 0})
+
+    # Output columns
+    df["higher_tournament_win_pct"] = 0.5
+    df["lower_tournament_win_pct"] = 0.5
+    df["higher_round_win_pct"] = 0.5
+    df["lower_round_win_pct"] = 0.5
+
+    for idx, row in df.iterrows():
+        hi = row["higher_id"]
+        lo = row["lower_id"]
+        tour = row["tourney_name"]
+        rnd = row["round"]
+        winner = row["log_target"]  # or whatever your target is (0/1)
+
+        # --- Tournament Win % ---
+        ht = tournament_stats[(hi, tour)]
+        lt = tournament_stats[(lo, tour)]
+
+        # Fallback to global if no tournament history
+        hg = global_stats[hi]
+        lg = global_stats[lo]
+
+        df.at[idx, "higher_tournament_win_pct"] = (
+            ht["wins"] / (ht["wins"] + ht["losses"])
+            if (ht["wins"] + ht["losses"]) > 0
+            else hg["wins"] / max(1, (hg["wins"] + hg["losses"]))
+        )
+
+        df.at[idx, "lower_tournament_win_pct"] = (
+            lt["wins"] / (lt["wins"] + lt["losses"])
+            if (lt["wins"] + lt["losses"]) > 0
+            else lg["wins"] / max(1, (lg["wins"] + lg["losses"]))
+        )
+
+        # --- Round Win % ---
+        hr = round_stats[(hi, rnd)]
+        lr = round_stats[(lo, rnd)]
+
+        df.at[idx, "higher_round_win_pct"] = (
+            hr["wins"] / (hr["wins"] + hr["losses"])
+            if (hr["wins"] + hr["losses"]) > 0
+            else hg["wins"] / max(1, (hg["wins"] + hg["losses"]))
+        )
+
+        df.at[idx, "lower_round_win_pct"] = (
+            lr["wins"] / (lr["wins"] + lr["losses"])
+            if (lr["wins"] + lr["losses"]) > 0
+            else lg["wins"] / max(1, (lg["wins"] + lg["losses"]))
+        )
+
+        # --- Update after match ---
+        # Higher wins?
+        if winner == 1:
+            tournament_stats[(hi, tour)]["wins"] += 1
+            tournament_stats[(lo, tour)]["losses"] += 1
+
+            round_stats[(hi, rnd)]["wins"] += 1
+            round_stats[(lo, rnd)]["losses"] += 1
+
+            global_stats[hi]["wins"] += 1
+            global_stats[lo]["losses"] += 1
+
+        else:  # Lower wins
+            tournament_stats[(lo, tour)]["wins"] += 1
+            tournament_stats[(hi, tour)]["losses"] += 1
+
+            round_stats[(lo, rnd)]["wins"] += 1
+            round_stats[(hi, rnd)]["losses"] += 1
+
+            global_stats[lo]["wins"] += 1
+            global_stats[hi]["losses"] += 1
+
+    return df
+
 def export_final_dataset(df):
 
     cols = [
         "tourney_prefix",
-        "is_grand_slam",
+        "tourney_level",
+        "round",
         "surface",
         "pseudo_date",
         "higher_id", "higher_name", "higher_rank", "higher_age",
@@ -465,10 +586,13 @@ def export_final_dataset(df):
         "height_diff",
         "age_advantage",
         "age_diff_z",
+        "higher_tournament_win_pct", "higher_round_win_pct",
+        "lower_tournament_win_pct", "lower_round_win_pct",
         "higher_global_elo", "lower_global_elo", "global_elo_diff",
         "higher_surface_elo", "lower_surface_elo", "surface_elo_diff",
         "higher_combined_elo", "lower_combined_elo", "combined_elo_diff",
         "higher_short_fatigue", "lower_short_fatigue", "fatigue_diff",
+        "higher_last_minutes", "lower_last_minutes", "last_minutes_diff",
         "higher_service_advantage", "higher_first_serve_pct",
         "higher_1stWon", "higher_2ndWon", "higher_svpt",
         "lower_service_advantage", "lower_first_serve_pct",
@@ -493,12 +617,13 @@ def data_cleaning():
     df = create_rank_order_features(df)
     df = compute_elo_features(df)
     df = compute_pseudo_dates(df)
-    df = compute_short_term_fatigue(df)
+    df = compute_fatigue(df)
     df = compute_age_features(df)
     df  = compute_height_features(df)
     df = create_tournament_features(df)
     df = compute_service_stats(df)
     df = feature_interactions(df)
+    df = compute_win_percentages(df)
     df = export_final_dataset(df)
 
     return df
@@ -529,13 +654,15 @@ def feature_engineering():
         "age_diff_z",
         "lower_service_advantage",
         "service_advantage_diff",
-
+       "last_minutes_diff",
         "first_serve_pct_diff",''
         "height_diff",
+        "higher_tournament_win_pct", "higher_round_win_pct",
+        "lower_tournament_win_pct", "lower_round_win_pct",
 
     ]
 
-    FEATURES_CAT = ["age_advantage", "is_grand_slam", "surface"]  # 3-category feature
+    FEATURES_CAT = ["tourney_level", "surface"]  # 3-category feature
 
     TARGET = "log_target"
 
@@ -550,6 +677,8 @@ def feature_engineering():
     IQR_cap = ["lower_combined_elo","combined_elo_diff", "fatigue_diff",
         "lower_service_advantage",
         "service_advantage_diff", "age_diff_z", "first_serve_pct_diff", "height_diff",
+               "last_minutes_diff", "higher_tournament_win_pct", "higher_round_win_pct",
+        "lower_tournament_win_pct", "lower_round_win_pct",
         ]
 
     for col in IQR_cap:
@@ -700,5 +829,5 @@ def feature_engineering():
     }
 
 if __name__ == '__main__':
-    data_cleaning()
+    #data_cleaning()
     feature_engineering()
