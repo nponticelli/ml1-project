@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from numpy.linalg import svd
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import seaborn as sns
+from sklearn.utils.class_weight import compute_class_weight
 
 # ---------------------------------------
 # Master Cleaner
@@ -188,7 +189,7 @@ def compute_elo_features(df):
     K_global = 32
     K_surface = 24
     min_surface_matches = 3
-    surface_weight = 0.6
+    surface_weight = 0.7
 
     df = df.sort_values(["tourney_date", "match_num"])
 
@@ -448,6 +449,10 @@ def compute_service_stats(df, window=5):
 
     return df
 
+def feature_interactions(df):
+
+    return df
+
 def export_final_dataset(df):
 
     cols = [
@@ -462,6 +467,7 @@ def export_final_dataset(df):
         "age_diff_z",
         "higher_global_elo", "lower_global_elo", "global_elo_diff",
         "higher_surface_elo", "lower_surface_elo", "surface_elo_diff",
+        "higher_combined_elo", "lower_combined_elo", "combined_elo_diff",
         "higher_short_fatigue", "lower_short_fatigue", "fatigue_diff",
         "higher_service_advantage", "higher_first_serve_pct",
         "higher_1stWon", "higher_2ndWon", "higher_svpt",
@@ -492,9 +498,13 @@ def data_cleaning():
     df  = compute_height_features(df)
     df = create_tournament_features(df)
     df = compute_service_stats(df)
+    df = feature_interactions(df)
     df = export_final_dataset(df)
 
     return df
+
+
+
 
 def feature_engineering():
 
@@ -513,18 +523,16 @@ def feature_engineering():
     # ---------------------------------------
     # Keep only the features you defined
     FEATURES_NUM = [
-        "lower_surface_elo",
-        "surface_elo_diff",
+        "lower_combined_elo",
+        "combined_elo_diff",
         "fatigue_diff",
         "age_diff_z",
-        "higher_service_advantage",
         "lower_service_advantage",
         "service_advantage_diff",
-        "lower_first_serve_pct",
+
         "first_serve_pct_diff",''
         "height_diff",
-        "lower_global_elo",
-        "global_elo_diff",
+
     ]
 
     FEATURES_CAT = ["age_advantage", "is_grand_slam", "surface"]  # 3-category feature
@@ -539,10 +547,10 @@ def feature_engineering():
     # ---------------------------------------
     # 3. Handle Outliers (IQR Winsorization)
     # ---------------------------------------
-    IQR_cap = ["lower_surface_elo","surface_elo_diff", "fatigue_diff", "higher_service_advantage",
+    IQR_cap = ["lower_combined_elo","combined_elo_diff", "fatigue_diff",
         "lower_service_advantage",
-        "service_advantage_diff", "age_diff_z", "lower_first_serve_pct", "first_serve_pct_diff", "height_diff", "lower_global_elo",
-        "global_elo_diff",]
+        "service_advantage_diff", "age_diff_z", "first_serve_pct_diff", "height_diff",
+        ]
 
     for col in IQR_cap:
         Q1, Q3 = X[col].quantile([0.25, 0.75])
@@ -566,6 +574,33 @@ def feature_engineering():
     # ---------------------------------------
     scaler = StandardScaler()
     X_num_scaled = scaler.fit_transform(X[FEATURES_NUM])
+
+    # ---------------------------------------
+    # 5a. Singular Value Decomposition (SVD)
+    # ---------------------------------------
+    U, S, VT = np.linalg.svd(X_num_scaled, full_matrices=False)
+    print("\nSVD singular values:", S)
+    print("Explained variance ratio by SVD (normalized):", S**2 / np.sum(S**2))
+
+    # ---------------------------------------
+    # 5b. Variance Inflation Factor (VIF)
+    # ---------------------------------------
+    vif_data = pd.DataFrame()
+    vif_data["Feature"] = FEATURES_NUM
+    vif_data["VIF"] = [variance_inflation_factor(X_num_scaled, i) for i in range(X_num_scaled.shape[1])]
+    print("\nVariance Inflation Factors (VIF):")
+    print(vif_data)
+
+    # ---------------------------------------
+    # 6. Combine into full feature matrix
+    # ---------------------------------------
+    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+    X_cat = encoder.fit_transform(X[FEATURES_CAT])
+    cat_feature_names = encoder.get_feature_names_out(FEATURES_CAT)
+
+    X_full = np.hstack([X_num_scaled, X_cat])
+    full_feature_list = FEATURES_NUM + list(cat_feature_names)
+    print("Final feature matrix:", X_full.shape)
 
     # ---------------------------------------
     # 6. Combine into full feature matrix
@@ -664,7 +699,6 @@ def feature_engineering():
         "feature_names": full_feature_list
     }
 
-
 if __name__ == '__main__':
-    #data_cleaning()
+    data_cleaning()
     feature_engineering()
