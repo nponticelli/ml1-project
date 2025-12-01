@@ -406,15 +406,50 @@ def compute_age_features(df):
     return df
 
 def compute_height_features(df):
-    df['height_diff'] = df['playerA_height'] - df['playerB_height']
+    # Combine all heights to get mean and std
+    all_heights = pd.concat([df["playerA_height"], df["playerB_height"]])
+    mean_height, std_height = all_heights.mean(), all_heights.std()
+
+    # Distance from mean (prime height)
+    df["playerA_prime_height"] = abs(df["playerA_height"] - mean_height)
+    df["playerB_prime_height"] = abs(df["playerB_height"] - mean_height)
+
+    # Difference in prime height
+    df["prime_height_diff"] = df["playerA_prime_height"] - df["playerB_prime_height"]
+
+    # Raw height difference
+    df["raw_height_diff"] = df["playerA_height"] - df["playerB_height"]
+
     return df
 
-def create_tournament_features(df):
+def compute_grand_slam_champion(df):
+    """
+    Adds features indicating if a player has won a Grand Slam up to that point.
+    Assumes df is sorted by pseudo_date.
+    Winner of GS final is determined by log_target: 1=playerA wins, 0=playerB wins.
+    """
+    df['playerA_grand_slam'] = 0
+    df['playerB_grand_slam'] = 0
 
-    df['tourney_prefix'] = df['tourney_id'].astype(str).str[:4] + "_" + df['tourney_name']
+    gs_winners = defaultdict(bool)  # player_id -> has won GS yet?
 
-    grand_slams = ["Australian Open", "Roland Garros", "Wimbledon", "US Open"]
-    df["is_grand_slam"] = df["tourney_name"].isin(grand_slams).astype(int)
+    for idx, row in df.iterrows():
+        pA = row['playerA_id']
+        pB = row['playerB_id']
+
+        # Mark if they've won GS before this match
+        df.at[idx, 'playerA_grand_slam'] = int(gs_winners[pA])
+        df.at[idx, 'playerB_grand_slam'] = int(gs_winners[pB])
+
+        # Update GS winner if this match is a Grand Slam final
+        if row['round'] == 'F' and row['tourney_level'] == 'G':
+            if row['log_target'] == 1:
+                gs_winners[pA] = True
+            elif row['log_target'] == 0:
+                gs_winners[pB] = True
+
+    # Optional: difference column
+    df['grand_slam_diff'] = df['playerA_grand_slam'] - df['playerB_grand_slam']
 
     return df
 
@@ -544,77 +579,175 @@ def compute_win_percentages(df):
     global_stats = defaultdict(lambda: {"wins": 0, "losses": 0})
 
     # Output columns
-    df["higher_tournament_win_pct"] = 0.5
-    df["lower_tournament_win_pct"] = 0.5
-    df["higher_round_win_pct"] = 0.5
-    df["lower_round_win_pct"] = 0.5
+    df["playerA_tournament_win_pct"] = 0.5
+    df["playerB_tournament_win_pct"] = 0.5
+    df["playerA_round_win_pct"] = 0.5
+    df["playerB_round_win_pct"] = 0.5
+
+    # Laplace smoothing parameter
+    alpha = 1
 
     for idx, row in df.iterrows():
-        hi = row["higher_id"]
-        lo = row["lower_id"]
+        playerA = row["playerA_id"]
+        playerB = row["playerB_id"]
         tour = row["tourney_name"]
         rnd = row["round"]
-        winner = row["log_target"]  # or whatever your target is (0/1)
+        winner = row["log_target"]  # 1 if playerA wins, 0 if playerB wins
 
         # --- Tournament Win % ---
-        ht = tournament_stats[(hi, tour)]
-        lt = tournament_stats[(lo, tour)]
+        playerA_tourney = tournament_stats[(playerA, tour)]
+        playerB_tourney = tournament_stats[(playerB, tour)]
+        playerA_global = global_stats[playerA]
+        playerB_global = global_stats[playerB]
 
-        # Fallback to global if no tournament history
-        hg = global_stats[hi]
-        lg = global_stats[lo]
+        # Player A tournament win %
+        if (playerA_tourney["wins"] + playerA_tourney["losses"]) > 0:
+            df.at[idx, "playerA_tournament_win_pct"] = (
+                (playerA_tourney["wins"] + alpha) /
+                (playerA_tourney["wins"] + playerA_tourney["losses"] + 2 * alpha)
+            )
+        else:
+            df.at[idx, "playerA_tournament_win_pct"] = (
+                (playerA_global["wins"] + alpha) /
+                (playerA_global["wins"] + playerA_global["losses"] + 2 * alpha)
+            )
 
-        df.at[idx, "higher_tournament_win_pct"] = (
-            ht["wins"] / (ht["wins"] + ht["losses"])
-            if (ht["wins"] + ht["losses"]) > 0
-            else hg["wins"] / max(1, (hg["wins"] + hg["losses"]))
-        )
-
-        df.at[idx, "lower_tournament_win_pct"] = (
-            lt["wins"] / (lt["wins"] + lt["losses"])
-            if (lt["wins"] + lt["losses"]) > 0
-            else lg["wins"] / max(1, (lg["wins"] + lg["losses"]))
-        )
+        # Player B tournament win %
+        if (playerB_tourney["wins"] + playerB_tourney["losses"]) > 0:
+            df.at[idx, "playerB_tournament_win_pct"] = (
+                (playerB_tourney["wins"] + alpha) /
+                (playerB_tourney["wins"] + playerB_tourney["losses"] + 2 * alpha)
+            )
+        else:
+            df.at[idx, "playerB_tournament_win_pct"] = (
+                (playerB_global["wins"] + alpha) /
+                (playerB_global["wins"] + playerB_global["losses"] + 2 * alpha)
+            )
 
         # --- Round Win % ---
-        hr = round_stats[(hi, rnd)]
-        lr = round_stats[(lo, rnd)]
+        playerA_round = round_stats[(playerA, rnd)]
+        playerB_round = round_stats[(playerB, rnd)]
 
-        df.at[idx, "higher_round_win_pct"] = (
-            hr["wins"] / (hr["wins"] + hr["losses"])
-            if (hr["wins"] + hr["losses"]) > 0
-            else hg["wins"] / max(1, (hg["wins"] + hg["losses"]))
-        )
+        # Player A round win %
+        if (playerA_round["wins"] + playerA_round["losses"]) > 0:
+            df.at[idx, "playerA_round_win_pct"] = (
+                (playerA_round["wins"] + alpha) /
+                (playerA_round["wins"] + playerA_round["losses"] + 2 * alpha)
+            )
+        else:
+            df.at[idx, "playerA_round_win_pct"] = (
+                (playerA_global["wins"] + alpha) /
+                (playerA_global["wins"] + playerA_global["losses"] + 2 * alpha)
+            )
 
-        df.at[idx, "lower_round_win_pct"] = (
-            lr["wins"] / (lr["wins"] + lr["losses"])
-            if (lr["wins"] + lr["losses"]) > 0
-            else lg["wins"] / max(1, (lg["wins"] + lg["losses"]))
-        )
+        # Player B round win %
+        if (playerB_round["wins"] + playerB_round["losses"]) > 0:
+            df.at[idx, "playerB_round_win_pct"] = (
+                (playerB_round["wins"] + alpha) /
+                (playerB_round["wins"] + playerB_round["losses"] + 2 * alpha)
+            )
+        else:
+            df.at[idx, "playerB_round_win_pct"] = (
+                (playerB_global["wins"] + alpha) /
+                (playerB_global["wins"] + playerB_global["losses"] + 2 * alpha)
+            )
 
         # --- Update after match ---
-        # Higher wins?
-        if winner == 1:
-            tournament_stats[(hi, tour)]["wins"] += 1
-            tournament_stats[(lo, tour)]["losses"] += 1
+        if winner == 1:  # Player A wins
+            tournament_stats[(playerA, tour)]["wins"] += 1
+            tournament_stats[(playerB, tour)]["losses"] += 1
+            round_stats[(playerA, rnd)]["wins"] += 1
+            round_stats[(playerB, rnd)]["losses"] += 1
+            global_stats[playerA]["wins"] += 1
+            global_stats[playerB]["losses"] += 1
+        else:  # Player B wins
+            tournament_stats[(playerB, tour)]["wins"] += 1
+            tournament_stats[(playerA, tour)]["losses"] += 1
+            round_stats[(playerB, rnd)]["wins"] += 1
+            round_stats[(playerA, rnd)]["losses"] += 1
+            global_stats[playerB]["wins"] += 1
+            global_stats[playerA]["losses"] += 1
 
-            round_stats[(hi, rnd)]["wins"] += 1
-            round_stats[(lo, rnd)]["losses"] += 1
+    df["tournament_win_pct_diff"] = df["playerA_tournament_win_pct"] - df["playerB_tournament_win_pct"]
+    df["round_win_pct_diff"] = df["playerA_round_win_pct"] - df["playerB_round_win_pct"]
+    return df
 
-            global_stats[hi]["wins"] += 1
-            global_stats[lo]["losses"] += 1
+def compute_rolling_ace_pct(df):
+    # Ensure sorted by date
+    df = df.sort_values("pseudo_date").reset_index(drop=True)
 
-        else:  # Lower wins
-            tournament_stats[(lo, tour)]["wins"] += 1
-            tournament_stats[(hi, tour)]["losses"] += 1
+    # Initialize new columns
+    df["playerA_ace_pct_rolling_10"] = 0.0
+    df["playerB_ace_pct_rolling_10"] = 0.0
 
-            round_stats[(lo, rnd)]["wins"] += 1
-            round_stats[(hi, rnd)]["losses"] += 1
+    # Track per-player ace percentages
+    player_ace_pct = defaultdict(list)
 
-            global_stats[lo]["wins"] += 1
-            global_stats[hi]["losses"] += 1
+    for idx, row in df.iterrows():
+        playerA = row["playerA_id"]
+        playerB = row["playerB_id"]
+
+        # --- Compute rolling for playerA ---
+        if playerA in player_ace_pct:
+            rolling_10 = player_ace_pct[playerA][-10:]
+            df.at[idx, "playerA_ace_pct_rolling_10"] = sum(rolling_10) / max(1, len(rolling_10))
+        else:
+            df.at[idx, "playerA_ace_pct_rolling_10"] = 0.0
+
+        # --- Compute rolling for playerB ---
+        if playerB in player_ace_pct:
+            rolling_10 = player_ace_pct[playerB][-10:]
+            df.at[idx, "playerB_ace_pct_rolling_10"] = sum(rolling_10) / max(1, len(rolling_10))
+        else:
+            df.at[idx, "playerB_ace_pct_rolling_10"] = 0.0
+
+        # --- Update ace % history ---
+        playerA_pct = row["playerA_ace"] / max(1, row["playerA_svpt"])
+        playerB_pct = row["playerB_ace"] / max(1, row["playerB_svpt"])
+
+        player_ace_pct[playerA].append(playerA_pct)
+        player_ace_pct[playerB].append(playerB_pct)
+
+    # Optional: compute difference for model
+    df["ace_pct_diff_rolling_10"] = df["playerA_ace_pct_rolling_10"] - df["playerB_ace_pct_rolling_10"]
 
     return df
+
+def compute_rolling_first_serve_win_pct(df):
+    # Ensure sorted by date
+    df = df.sort_values("pseudo_date").reset_index(drop=True)
+    df["pseudo_date"] = pd.to_datetime(df["pseudo_date"])
+
+    # Output columns
+    df["playerA_first_won_pct_rolling"] = 0.5
+    df["playerB_first_won_pct_rolling"] = 0.5
+
+    # Rolling calculation for each player
+    for player in ["A", "B"]:
+        player_col = f"player{player}_id"
+        first_won_col = f"player{player}_1stWon"
+        first_in_col = f"player{player}_1stIn"
+        out_col = f"player{player}_first_won_pct_rolling"
+
+        # Group by player, rolling 365 days on date
+        rolling = (
+            df
+            .set_index("pseudo_date")
+            .groupby(player_col)[[first_won_col, first_in_col]]
+            .rolling("365D")
+            .sum()
+            .reset_index(level=0, drop=True)
+        )
+
+        # Compute percentage safely
+        df[out_col] = rolling[first_won_col] / rolling[first_in_col].replace(0, 1)
+
+    # Difference feature
+    df["first_won_pct_diff_rolling"] = df["playerA_first_won_pct_rolling"] - df["playerB_first_won_pct_rolling"]
+
+    return df
+
+
 
 def export_final_dataset(df):
 
@@ -663,12 +796,14 @@ def data_cleaning():
     df = compute_pseudo_dates(df)
     df = compute_fatigue(df)
     df = compute_age_features(df)
+    df  = compute_height_features(df)
+    #df = compute_grand_slam_champion(df)
+    df = compute_rolling_ace_pct(df)
+    df = compute_win_percentages(df)
+    #df = compute_rolling_first_serve_win_pct(df)
     df.to_csv("data_cleaned_shuffled.csv", index=False)
-    #df  = compute_height_features(df)
-    #df = create_tournament_features(df)
     #df = compute_service_stats(df)
-    #df = feature_interactions(df)
-    #df = compute_win_percentages(df)
+
     #df = export_final_dataset(df)
 
     return df
@@ -695,10 +830,12 @@ def feature_engineering():
         "fatigue_10d_diff",
          "year_fatigue_diff",
         "raw_age_diff",
-        "prime_age_diff"
+        "prime_age_diff",
+        "raw_height_diff",
+        "prime_height_diff",
     ]
 
-    FEATURES_CAT = ["playerA_rusty", "playerB_rusty", "rusty_diff"]  # 3-category feature
+    FEATURES_CAT = ["playerA_rusty", "playerB_rusty", "rusty_diff"]
 
     TARGET = "log_target"
 
