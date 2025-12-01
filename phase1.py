@@ -1,3 +1,5 @@
+import random
+
 import pandas as pd
 import numpy as np
 import re
@@ -53,6 +55,8 @@ def clean_basic_fields(df):
     # --- Date and numeric casting ---
     df["tourney_date"] = pd.to_datetime(df["tourney_date"], errors="coerce")
     df["tourney_id"] = df["tourney_id"].astype(str)
+    df['winner_id'] = df['winner_id'].astype(str)
+    df['loser_id'] = df['loser_id'].astype(str)
     df["minutes"] = pd.to_numeric(df["minutes"], errors="coerce")
     df["winner_ht"] = df["winner_ht"].fillna(df["winner_ht"].median())
     df["loser_ht"] = df["loser_ht"].fillna(df["loser_ht"].median())
@@ -62,7 +66,7 @@ def clean_basic_fields(df):
     df["loser_hand"] = df["loser_hand"].fillna("U").replace("N", "U")
 
     # --- Surface cleaning ---
-    df["surface"] = df["surface"].fillna("Unknown")
+    df["surface"] = df["surface"].fillna(df["surface"].mode())
 
     # --- Seed and ranking normalizations ---
     df["winner_seed"] = df["winner_seed"].fillna(-1)
@@ -124,77 +128,6 @@ def clean_score_fields(df):
 
     return df
 
-def create_rank_order_features(df):
-
-    def reorder(row):
-        if row["winner_rank"] < row["loser_rank"]:
-            return pd.Series({
-                "higher_id": row["winner_id"],
-                "higher_rank": row["winner_rank"],
-                "higher_name": row["winner_name"],
-                "higher_height": row["winner_ht"],
-                "higher_ace": row["w_ace"],
-                "higher_df": row["w_df"],
-                "higher_svpt": row["w_svpt"],
-                "higher_1stIn": row["w_1stIn"],
-                "higher_1stWon": row["w_1stWon"],
-                "higher_2ndWon": row["w_2ndWon"],
-                "higher_SvGms": row["w_SvGms"],
-                "higher_bpSaved": row["w_bpSaved"],
-                "higher_bpFaced": row["w_bpFaced"],
-                "lower_id": row["loser_id"],
-                "lower_rank": row["loser_rank"],
-                "lower_name": row["loser_name"],
-                "lower_height": row["loser_ht"],
-                "lower_ace": row["l_ace"],
-                "lower_df": row["l_df"],
-                "lower_svpt": row["l_svpt"],
-                "lower_1stIn": row["l_1stIn"],
-                "lower_1stWon": row["l_1stWon"],
-                "lower_2ndWon": row["l_2ndWon"],
-                "lower_SvGms": row["l_SvGms"],
-                "lower_bpSaved": row["l_bpSaved"],
-                "lower_bpFaced": row["l_bpFaced"],
-                "higher_age": row["winner_age"],
-                "lower_age": row["loser_age"],
-                "log_target": 1
-                })
-        else:
-            return pd.Series({
-                "higher_id": row["loser_id"],
-                "higher_rank": row["loser_rank"],
-                "higher_name": row["loser_name"],
-                "higher_height": row["loser_ht"],
-                "higher_ace": row["l_ace"],
-                "higher_df": row["l_df"],
-                "higher_svpt": row["l_svpt"],
-                "higher_1stIn": row["l_1stIn"],
-                "higher_1stWon": row["l_1stWon"],
-                "higher_2ndWon": row["l_2ndWon"],
-                "higher_SvGms": row["l_SvGms"],
-                "higher_bpSaved": row["l_bpSaved"],
-                "higher_bpFaced": row["l_bpFaced"],
-                "lower_id": row["winner_id"],
-                "lower_rank": row["winner_rank"],
-                "lower_name": row["winner_name"],
-                "lower_height": row["winner_ht"],
-                "lower_ace": row["w_ace"],
-                "lower_df": row["w_df"],
-                "lower_svpt": row["w_svpt"],
-                "lower_1stIn": row["w_1stIn"],
-                "lower_1stWon": row["w_1stWon"],
-                "lower_2ndWon": row["w_2ndWon"],
-                "lower_SvGms": row["w_SvGms"],
-                "lower_bpSaved": row["w_bpSaved"],
-                "lower_bpFaced": row["w_bpFaced"],
-                "higher_age": row["loser_age"],
-                "lower_age": row["winner_age"],
-                "log_target": 0
-            })
-
-    df = pd.concat([df, df.apply(reorder, axis=1)], axis=1)
-    return df
-
 def compute_elo_features(df):
 
     BASE_ELO = 1500
@@ -211,9 +144,9 @@ def compute_elo_features(df):
 
     # preallocate columns
     for col in [
-        "higher_global_elo", "lower_global_elo", "global_elo_diff",
-        "higher_surface_elo", "lower_surface_elo", "surface_elo_diff",
-        "higher_combined_elo", "lower_combined_elo", "combined_elo_diff"
+        "playerA_global_elo", "playerB_global_elo", "global_elo_diff",
+        "playerA_surface_elo", "playerB_surface_elo", "surface_elo_diff",
+        "playerA_combined_elo", "playerB_combined_elo", "combined_elo_diff"
     ]:
         df[col] = np.nan
 
@@ -222,44 +155,131 @@ def compute_elo_features(df):
 
     for idx, row in df.iterrows():
 
-        hi, lo, surf = row["higher_id"], row["lower_id"], row["surface"]
+        a, b, surf = row["playerA_id"], row["playerB_id"], row["surface"]
         outcome = row["log_target"]
 
-        h_global, l_global = global_elo[hi], global_elo[lo]
+        playerA_global, playerB_global = global_elo[a], global_elo[b]
 
         # surface-level ELO (fallback logic)
-        h_surf = surface_elo[(hi, surf)] if surface_count[(hi, surf)] >= min_surface_matches else h_global
-        l_surf = surface_elo[(lo, surf)] if surface_count[(lo, surf)] >= min_surface_matches else l_global
+        playerA_surf = surface_elo[(a, surf)] if surface_count[(a, surf)] >= min_surface_matches else playerA_global
+        playerB_surf = surface_elo[(b, surf)] if surface_count[(b, surf)] >= min_surface_matches else playerB_global
 
         # store pre-match values
-        df.at[idx, "higher_global_elo"] = h_global
-        df.at[idx, "lower_global_elo"] = l_global
-        df.at[idx, "global_elo_diff"] = h_global - l_global
+        df.at[idx, "playerA_global_elo"] = playerA_global
+        df.at[idx, "playerB_global_elo"] = playerB_global
+        df.at[idx, "global_elo_diff"] = playerA_global - playerB_global
 
-        df.at[idx, "higher_surface_elo"] = h_surf
-        df.at[idx, "lower_surface_elo"] = l_surf
-        df.at[idx, "surface_elo_diff"] = h_surf - l_surf
+        df.at[idx, "playerA_surface_elo"] = playerA_surf
+        df.at[idx, "playerB_surface_elo"] = playerB_surf
+        df.at[idx, "surface_elo_diff"] = playerA_surf - playerB_surf
 
         # combined
-        h_comb = surface_weight * h_surf + (1 - surface_weight) * h_global
-        l_comb = surface_weight * l_surf + (1 - surface_weight) * l_global
-        df.at[idx, "higher_combined_elo"] = h_comb
-        df.at[idx, "lower_combined_elo"] = l_comb
-        df.at[idx, "combined_elo_diff"] = h_comb - l_comb
+        playerA_comb = surface_weight * playerA_surf + (1 - surface_weight) * playerA_global
+        playerB_comb = surface_weight * playerB_surf + (1 - surface_weight) * playerB_global
+        df.at[idx, "playerA_combined_elo"] = playerA_comb
+        df.at[idx, "playerB_combined_elo"] = playerB_comb
+        df.at[idx, "combined_elo_diff"] = playerA_comb - playerB_comb
 
         # update ELOs
-        exp_global = expected(h_global, l_global)
-        global_elo[hi] += K_global * (outcome - exp_global)
-        global_elo[lo] += K_global * ((1 - outcome) - (1 - exp_global))
+        exp_global = expected(playerA_global, playerB_global)
+        global_elo[a] += K_global * (outcome - exp_global)
+        global_elo[b] += K_global * ((1 - outcome) - (1 - exp_global))
 
-        exp_surf = expected(h_surf, l_surf)
-        surface_elo[(hi, surf)] = h_surf + K_surface * (outcome - exp_surf)
-        surface_elo[(lo, surf)] = l_surf + K_surface * ((1 - outcome) - (1 - exp_surf))
+        exp_surf = expected(playerA_surf, playerB_surf)
+        surface_elo[(a, surf)] = playerA_surf + K_surface * (outcome - exp_surf)
+        surface_elo[(b, surf)] = playerB_surf + K_surface * ((1 - outcome) - (1 - exp_surf))
 
-        surface_count[(hi, surf)] += 1
-        surface_count[(lo, surf)] += 1
+        surface_count[(a, surf)] += 1
+        surface_count[(b, surf)] += 1
 
     return df
+
+def create_rank_order_features(df, seed = 42):
+    np.random.seed(seed)
+    def reorder(row):
+
+        new_row = {
+            "tourney_id": row["tourney_id"],
+            "tourney_name": row["tourney_name"],
+            "tourney_date": row["tourney_date"],
+            "tourney_level": row["tourney_level"],
+            "round": row["round"],
+            "surface": row["surface"],
+            "match_num": row["match_num"],
+            "minutes": row["minutes"],
+        }
+        val = np.random.choice([True, False])
+        if val:
+            new_row.update({
+                "playerA_id": row["winner_id"],
+                "playerA_rank": row["winner_rank"],
+                "playerA_name": row["winner_name"],
+                "playerA_age": row["winner_age"],
+                "playerA_height": row["winner_ht"],
+                "playerA_ace": row["w_ace"],
+                "playerA_df": row["w_df"],
+                "playerA_svpt": row["w_svpt"],
+                "playerA_1stIn": row["w_1stIn"],
+                "playerA_1stWon": row["w_1stWon"],
+                "playerA_2ndWon": row["w_2ndWon"],
+                "playerA_SvGms": row["w_SvGms"],
+                "playerA_bpSaved": row["w_bpSaved"],
+                "playerA_bpFaced": row["w_bpFaced"],
+                "playerB_id": row["loser_id"],
+                "playerB_rank": row["loser_rank"],
+                "playerB_name": row["loser_name"],
+                "playerB_age": row["loser_age"],
+                "playerB_height": row["loser_ht"],
+                "playerB_ace": row["l_ace"],
+                "playerB_df": row["l_df"],
+                "playerB_svpt": row["l_svpt"],
+                "playerB_1stIn": row["l_1stIn"],
+                "playerB_1stWon": row["l_1stWon"],
+                "playerB_2ndWon": row["l_2ndWon"],
+                "playerB_SvGms": row["l_SvGms"],
+                "playerB_bpSaved": row["l_bpSaved"],
+                "playerB_bpFaced": row["l_bpFaced"],
+            })
+
+        else:
+            new_row.update({
+                "playerA_id": row["loser_id"],
+                "playerA_rank": row["loser_rank"],
+                "playerA_name": row["loser_name"],
+                "playerA_age": row["loser_age"],
+                "playerA_height": row["loser_ht"],
+                "playerA_ace": row["l_ace"],
+                "playerA_df": row["l_df"],
+                "playerA_svpt": row["l_svpt"],
+                "playerA_1stIn": row["l_1stIn"],
+                "playerA_1stWon": row["l_1stWon"],
+                "playerA_2ndWon": row["l_2ndWon"],
+                "playerA_SvGms": row["l_SvGms"],
+                "playerA_bpSaved": row["l_bpSaved"],
+                "playerA_bpFaced": row["l_bpFaced"],
+                "playerB_id": row["winner_id"],
+                "playerB_rank": row["winner_rank"],
+                "playerB_name": row["winner_name"],
+                "playerB_age": row["winner_age"],
+                "playerB_height": row["winner_ht"],
+                "playerB_ace": row["w_ace"],
+                "playerB_df": row["w_df"],
+                "playerB_svpt": row["w_svpt"],
+                "playerB_1stIn": row["w_1stIn"],
+                "playerB_1stWon": row["w_1stWon"],
+                "playerB_2ndWon": row["w_2ndWon"],
+                "playerB_SvGms": row["w_SvGms"],
+                "playerB_bpSaved": row["w_bpSaved"],
+                "playerB_bpFaced": row["w_bpFaced"],
+            })
+
+        if row['winner_id'] == new_row['playerA_id']:
+            new_row['log_target'] = 1
+        else:
+            new_row['log_target'] = 0
+        return pd.Series(new_row)
+    df_new = df.apply(reorder, axis=1).reset_index(drop=True)
+    return df_new
 
 def compute_pseudo_dates(df):
     grand_slams = {"Wimbledon", "Roland Garros", "Australian Open", "US Open"}
@@ -270,96 +290,123 @@ def compute_pseudo_dates(df):
     for idx, row in df.sort_values(['tourney_date', 'match_num']).iterrows():
 
         tid = row['tourney_id']
-        winner, loser = row['winner_id'], row['loser_id']
+        playerA, playerB = row['playerA_id'], row['playerB_id']
 
         is_gs = str(row['tourney_name']) in grand_slams
         inc = 2 if is_gs else 1
 
-        c_w = tourney_dict[tid].get(winner, 0)
-        c_l = tourney_dict[tid].get(loser, 0)
+        c_w = tourney_dict[tid].get(playerA, 0)
+        c_l = tourney_dict[tid].get(playerB, 0)
         prior = max(c_w, c_l)
 
         df.at[idx, 'pseudo_date'] = row['tourney_date'] + pd.Timedelta(days=inc * prior)
 
-        tourney_dict[tid][winner] = prior + 1
-        tourney_dict[tid][loser] = prior + 1
+        tourney_dict[tid][playerA] = prior + 1
+        tourney_dict[tid][playerB] = prior + 1
 
     df = df.sort_values('pseudo_date').reset_index(drop=True)
     return df
 
 def compute_fatigue(df):
-    window = pd.Timedelta(days=10)
-    df["minutes"] = df.get("minutes", 60)
+    # Ensure df sorted by chronological order
+    df = df.sort_values("pseudo_date").reset_index(drop=True)
 
-    df["higher_short_fatigue"] = 0.0
-    df["lower_short_fatigue"] = 0.0
+    # Preallocate output columns
+    for col in [
+        "playerA_last_minutes", "playerB_last_minutes",
+        "playerA_fatigue_10d", "playerB_fatigue_10d",
+        "playerA_year_fatigue", "playerB_year_fatigue",
+        "playerA_rusty", "playerB_rusty",
+        "last_minutes_diff", "fatigue_10d_diff", "year_fatigue_diff",
+        "rusty_diff"
+    ]:
+        df[col] = 0.0
 
-    df["higher_last_minutes"] = 0.0
-    df["lower_last_minutes"] = 0.0
+    # History per player: list of (date, minutes)
+    match_history = defaultdict(list)
 
-    hist = defaultdict(list)
+    THREE_DAYS = pd.Timedelta(days=3)
+    TEN_DAYS = pd.Timedelta(days=10)
+    THIRTY_DAYS = pd.Timedelta(days=30)
 
     for idx, row in df.iterrows():
         date = row["pseudo_date"]
-        hi, lo = row["higher_id"], row["lower_id"]
+        year = str(row["tourney_id"])[:4]
 
-        def fatigue(p):
-            return sum(m for d, m in hist[p] if d >= date - window)
+        pA = row["playerA_id"]
+        pB = row["playerB_id"]
 
-        df.at[idx, "higher_short_fatigue"] = fatigue(hi)
-        df.at[idx, "lower_short_fatigue"] = fatigue(lo)
-
-        # --- NEW: LAST MATCH MINUTES WITHIN 3 DAYS ---
-        recent_limit = date - pd.Timedelta(days=3)
-
-        def last_match_minutes(p):
-            # look at previous matches only
-            matches = [ (d, m) for d, m in hist[p] if d < date ]
-            if not matches:
+        # --- LAST MATCH MINUTES (ONLY IF LAST MATCH WITHIN 3 DAYS) ---
+        def get_last_minutes(player):
+            hist = match_history[player]
+            if not hist:
                 return 0
-            # most recent previous match
-            last_date, last_mins = matches[-1]
-            return last_mins if last_date >= recent_limit else 0
+            last_date, last_min = hist[-1]
+            if last_date < date and last_date >= date - THREE_DAYS:
+                return last_min
+            return 0
 
-        df.at[idx, "higher_last_minutes"] = last_match_minutes(hi)
-        df.at[idx, "lower_last_minutes"] = last_match_minutes(lo)
+        df.at[idx, "playerA_last_minutes"] = get_last_minutes(pA)
+        df.at[idx, "playerB_last_minutes"] = get_last_minutes(pB)
 
-        hist[hi].append((date, row["minutes"]))
-        hist[lo].append((date, row["minutes"]))
+        # --- FATIGUE LAST 10 DAYS ---
+        def get_fatigue_10d(player):
+            return sum(
+                minutes for d, minutes in match_history[player]
+                if (date - TEN_DAYS) <= d < date
+            )
 
-    df.fillna(
-        {"higher_short_fatigue": 0, "lower_short_fatigue": 0,
-         "higher_last_minutes": 0, "lower_last_minutes": 0},
-        inplace=True
-    )
-    df["fatigue_diff"] = df["higher_short_fatigue"] - df["lower_short_fatigue"]
-    df["last_minutes_diff"] = df["higher_last_minutes"] - df["lower_last_minutes"]
+        df.at[idx, "playerA_fatigue_10d"] = get_fatigue_10d(pA)
+        df.at[idx, "playerB_fatigue_10d"] = get_fatigue_10d(pB)
+
+        # --- YEAR FATIGUE ---
+        def get_year_fatigue(player):
+            return sum(
+                minutes for d, minutes in match_history[player]
+                if str(d.year) == year and d < date
+            )
+
+        df.at[idx, "playerA_year_fatigue"] = get_year_fatigue(pA)
+        df.at[idx, "playerB_year_fatigue"] = get_year_fatigue(pB)
+
+        # --- RUSTINESS (no match in over 30 days) ---
+        def get_rustiness(player):
+            hist = match_history[player]
+            if not hist:
+                return 1  # no prior matches means very rusty
+            last_date, _ = hist[-1]
+            return 1 if last_date < date - THIRTY_DAYS else 0
+
+        df.at[idx, "playerA_rusty"] = get_rustiness(pA)
+        df.at[idx, "playerB_rusty"] = get_rustiness(pB)
+
+        # --- UPDATE HISTORY AFTER calculations ---
+        match_history[pA].append((date, row["minutes"]))
+        match_history[pB].append((date, row["minutes"]))
+
+    # Differences
+    df["last_minutes_diff"] = df["playerA_last_minutes"] - df["playerB_last_minutes"]
+    df["fatigue_10d_diff"] = df["playerA_fatigue_10d"] - df["playerB_fatigue_10d"]
+    df["year_fatigue_diff"] = df["playerA_year_fatigue"] - df["playerB_year_fatigue"]
+    df["rusty_diff"] = df["playerA_rusty"] - df["playerB_rusty"]
+
     return df
 
 def compute_age_features(df):
-    all_ages = pd.concat([df["winner_age"], df["loser_age"]])
+    all_ages = pd.concat([df["playerA_age"], df["playerB_age"]])
     mean_age, std_age = all_ages.mean(), all_ages.std()
 
-    df["higher_dev"] = abs(df["higher_age"] - mean_age)
-    df["lower_dev"] = abs(df["lower_age"] - mean_age)
+    df["playerA_prime_age"] = abs(df["playerA_age"] - mean_age)
+    df["playerB_prime_age"] = abs(df["playerB_age"] - mean_age)
 
-    df["age_dev_diff"] = df["lower_dev"] - df["higher_dev"]
+    df["prime_age_diff"] = df["playerA_prime_age"] - df["playerB_prime_age"]
 
-    df["age_diff_z"] = (df["age_dev_diff"] - df["age_dev_diff"].mean()) / df["age_dev_diff"].std()
+    df["raw_age_diff"] = df["playerA_age"] - df["playerB_age"]
 
-    def age_adv(row):
-        if row["age_dev_diff"] > std_age:
-            return "higher_seed_age_advantage"
-        elif row["age_dev_diff"] < -std_age:
-            return "lower_seed_age_advantage"
-        else:
-            return "no_age_advantage"
-
-    df["age_advantage"] = df.apply(age_adv, axis=1)
     return df
 
 def compute_height_features(df):
-    df['height_diff'] = df['higher_height'] - df['lower_height']
+    df['height_diff'] = df['playerA_height'] - df['playerB_height']
     return df
 
 def create_tournament_features(df):
@@ -480,10 +527,6 @@ def compute_service_stats(df, window=5):
     df['lower_first_serve_pct'] = lower_first_pct
     df['first_serve_pct_diff'] = df['higher_first_serve_pct'] - df['lower_first_serve_pct']
 
-
-    return df
-
-def feature_interactions(df):
 
     return df
 
@@ -615,28 +658,27 @@ def data_cleaning():
     df = clean_basic_fields(df)
     df = clean_score_fields(df)
     df = create_rank_order_features(df)
+    df = df.sort_values(["tourney_date", "match_num"])
     df = compute_elo_features(df)
     df = compute_pseudo_dates(df)
     df = compute_fatigue(df)
     df = compute_age_features(df)
-    df  = compute_height_features(df)
-    df = create_tournament_features(df)
-    df = compute_service_stats(df)
-    df = feature_interactions(df)
-    df = compute_win_percentages(df)
-    df = export_final_dataset(df)
+    df.to_csv("data_cleaned_shuffled.csv", index=False)
+    #df  = compute_height_features(df)
+    #df = create_tournament_features(df)
+    #df = compute_service_stats(df)
+    #df = feature_interactions(df)
+    #df = compute_win_percentages(df)
+    #df = export_final_dataset(df)
 
     return df
-
-
-
 
 def feature_engineering():
 
     # ---------------------------------------
     # 1. Load dataset
     # ---------------------------------------
-    df = pd.read_csv("fe_simplified_modular.csv")
+    df = pd.read_csv("data_cleaned_shuffled.csv")
     df = df.sort_values("pseudo_date").reset_index(drop=True)
 
     # Drop first 3000 rows for warm-up period
@@ -648,21 +690,15 @@ def feature_engineering():
     # ---------------------------------------
     # Keep only the features you defined
     FEATURES_NUM = [
-        "lower_combined_elo",
         "combined_elo_diff",
-        "fatigue_diff",
-        "age_diff_z",
-        "lower_service_advantage",
-        "service_advantage_diff",
-       "last_minutes_diff",
-        "first_serve_pct_diff",''
-        "height_diff",
-        "higher_tournament_win_pct", "higher_round_win_pct",
-        "lower_tournament_win_pct", "lower_round_win_pct",
-
+        "last_minutes_diff",
+        "fatigue_10d_diff",
+         "year_fatigue_diff",
+        "raw_age_diff",
+        "prime_age_diff"
     ]
 
-    FEATURES_CAT = ["tourney_level", "surface"]  # 3-category feature
+    FEATURES_CAT = ["playerA_rusty", "playerB_rusty", "rusty_diff"]  # 3-category feature
 
     TARGET = "log_target"
 
@@ -674,12 +710,7 @@ def feature_engineering():
     # ---------------------------------------
     # 3. Handle Outliers (IQR Winsorization)
     # ---------------------------------------
-    IQR_cap = ["lower_combined_elo","combined_elo_diff", "fatigue_diff",
-        "lower_service_advantage",
-        "service_advantage_diff", "age_diff_z", "first_serve_pct_diff", "height_diff",
-               "last_minutes_diff", "higher_tournament_win_pct", "higher_round_win_pct",
-        "lower_tournament_win_pct", "lower_round_win_pct",
-        ]
+    IQR_cap = FEATURES_NUM
 
     for col in IQR_cap:
         Q1, Q3 = X[col].quantile([0.25, 0.75])
