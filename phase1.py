@@ -690,7 +690,7 @@ def feature_engineering():
     U, S, VT = np.linalg.svd(X_train_num_scaled, full_matrices=False)
     print("\nSVD singular values:", S)
     print("Explained variance ratio by SVD (normalized):", S ** 2 / np.sum(S ** 2))
-
+    
     # ---------------------------------------
     # 5b. Variance Inflation Factor (VIF)
     # ---------------------------------------
@@ -711,9 +711,10 @@ def feature_engineering():
     # 8. Pearson correlation matrix
     # ---------------------------------------
     corr_matrix = pd.DataFrame(X_train_num_scaled, columns=FEATURES_NUM).corr()
-    plt.figure(figsize=(7, 5))
+    plt.figure(figsize=(16, 8))
     sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
     plt.title("Pearson Correlation — Numerical Features")
+    plt.tight_layout()
     plt.show()
 
     # ---------------------------------------
@@ -722,6 +723,42 @@ def feature_engineering():
     pca = PCA(n_components=len(FEATURES_NUM))
     X_pca = pca.fit_transform(X_train_num_scaled)
     print("\nPCA explained variance ratio:", pca.explained_variance_ratio_)
+    explained_variance_ratio = np.array(pca.explained_variance_ratio_)
+    # Calculate the cumulative explained variance
+    cumulative_variance = np.cumsum(explained_variance_ratio)
+
+    # Create component indices for the x-axis
+    n_components = len(explained_variance_ratio)
+    components = np.arange(1, n_components + 1)
+
+    # Plotting setup
+    sns.set_style("whitegrid")
+    plt.figure(figsize=(10, 6))
+
+    plt.plot(components, cumulative_variance, marker='o', linestyle='-', color='purple')
+
+    # Add 90% target line (you can change 0.90 to 0.95 or another target)
+    target_variance = 0.90
+    n_components_target = np.argmax(cumulative_variance >= target_variance) + 1
+
+    plt.axhline(y=target_variance, color='r', linestyle='--', label=f'{target_variance*100:.0f}% Variance')
+    plt.axvline(x=n_components_target, color='r', linestyle='--')
+    plt.text(n_components_target + 0.5, target_variance - 0.05, 
+            f'{n_components_target} Components', color='r', fontsize=12)
+
+    plt.title('Cumulative Explained Variance Plot', fontsize=16)
+    plt.xlabel('Number of Principal Components', fontsize=14)
+    plt.ylabel('Cumulative Explained Variance Ratio', fontsize=14)
+    plt.xticks(components)
+    plt.yticks(np.arange(0, 1.1, 0.1))
+    plt.legend(loc='lower right')
+    plt.grid(True)
+    plt.tight_layout()
+
+    plt.savefig('your_actual_cumulative_explained_variance_plot.png')
+
+
+
 
     # ---------------------------------------
     # 11. LDA (full feature set)
@@ -732,8 +769,8 @@ def feature_engineering():
     print("LDA explained variance:", lda.explained_variance_ratio_)
 
     plt.figure(figsize=(8, 4))
-    plt.hist(X_lda[y_train == 1], alpha=.5, label="Higher seed wins (1)")
-    plt.hist(X_lda[y_train == 0], alpha=.5, label="Lower seed wins (0)")
+    plt.hist(X_lda[y_train == 1], alpha=.5, label="Player A wins (1)")
+    plt.hist(X_lda[y_train == 0], alpha=.5, label="Player B wins (0)")
     plt.legend()
     plt.title("LDA projection (LD1)")
     plt.show()
