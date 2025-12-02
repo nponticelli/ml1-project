@@ -724,8 +724,8 @@ def feature_engineering():
     print("LDA explained variance:", lda.explained_variance_ratio_)
 
     plt.figure(figsize=(8, 4))
-    plt.hist(X_lda[y == 1], alpha=.5, label="Higher seed wins (1)")
-    plt.hist(X_lda[y == 0], alpha=.5, label="Lower seed wins (0)")
+    plt.hist(X_lda[y_train == 1], alpha=.5, label="Higher seed wins (1)")
+    plt.hist(X_lda[y_train == 0], alpha=.5, label="Lower seed wins (0)")
     plt.legend()
     plt.title("LDA projection (LD1)")
     plt.show()
@@ -772,9 +772,6 @@ def feature_engineering():
         "encoder": encoder,
         "feature_names": full_feature_list
     }
-
-
-
 
 if __name__ == '__main__':
     #data_cleaning()
