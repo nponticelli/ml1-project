@@ -1,225 +1,262 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from imblearn.over_sampling import SMOTE
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.model_selection import GridSearchCV, train_test_split, TimeSeriesSplit
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.decomposition import PCA
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, StackingClassifier
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA_Classifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import classification_report, accuracy_score
+import time
 from sklearn.linear_model import LogisticRegression
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
-from sklearn.naive_bayes import GaussianNB
-from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import RandomForestClassifier
 
-def load_and_prepare_data(file_path="fe_simplified_modular.csv"):
+def load_and_prepare_data(file_path="phaseII.csv"):
     # Load dataset
     df = pd.read_csv(file_path)
-    df = df.sort_values("pseudo_date").reset_index(drop=True)
-
-    # Warm-up drop
-    df = df.iloc[3000:].reset_index(drop=True)
-    print("After warm-up drop:", df.shape)
-
-    # Define features and target
     FEATURES_NUM = [
-        "lower_combined_elo", "combined_elo_diff", "fatigue_diff",
-        "age_diff_z", "lower_service_advantage", "service_advantage_diff",
-        "first_serve_pct_diff", "height_diff"
+        "combined_elo_diff",
+        "last_minutes_diff",
+        "fatigue_10d_diff",
+        "year_fatigue_diff",
+        "raw_age_diff",
+        "prime_age_diff",
+        "raw_height_diff",
+        "prime_height_diff",
+        "service_advantage_diff",
     ]
-    FEATURES_CAT = ["age_advantage", "is_grand_slam", "surface"]
+    FEATURES_CAT = ["rusty_diff", "best_of"]
     TARGET = "log_target"
 
     X = df[FEATURES_NUM + FEATURES_CAT].copy()
-    y = df[TARGET].copy().values.ravel()
+    Y = df[TARGET].copy()
+    # Split the data
+    cutoff = int(len(X) * 0.8)
+    x_train_raw, x_test_raw = X[:cutoff], X[cutoff:]
+    y_train, y_test = Y[:cutoff], Y[cutoff:]
 
+    print("Train/Test Split Complete:")
+    print(f"x_train_raw shape: {x_train_raw.shape}, x_test_raw shape: {x_test_raw.shape}")
 
+    scaler = StandardScaler()
 
-    # Handle outliers with IQR Winsorization
-    for col in FEATURES_NUM:
-        Q1, Q3 = X[col].quantile([0.25,0.75])
-        IQR = Q3 - Q1
-        lower, upper = Q1 - 1.5*IQR, Q3 + 1.5*IQR
-        X[col] = X[col].clip(lower, upper)
+    # FIT the scaler ONLY on the training data
+    x_train_num_scaled = scaler.fit_transform(x_train_raw[FEATURES_NUM])
+    # TRANSFORM the test data using the TR AINING fit
+    x_test_num_scaled = scaler.transform(x_test_raw[FEATURES_NUM])
 
-    # Encode categorical features
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-    X_cat = encoder.fit_transform(X[FEATURES_CAT])
+    # Encoder
+    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore", drop='first')
+
+    # FIT the encoder ONLY on the training data
+    x_train_cat = encoder.fit_transform(x_train_raw[FEATURES_CAT])
+    # TRANSFORM the test data using the TRAINING fit
+    x_test_cat = encoder.transform(x_test_raw[FEATURES_CAT])
+
+    # Get feature names for final list
     cat_feature_names = encoder.get_feature_names_out(FEATURES_CAT)
 
-    # Scale numerical features
-    scaler = StandardScaler()
-    X_num_scaled = scaler.fit_transform(X[FEATURES_NUM])
+    # ---------------------------------------
+    # 4. Combine into final feature matrices
+    # ---------------------------------------
+    # Stack the scaled numerical features and the encoded categorical features
+    x_train = np.hstack([x_train_num_scaled, x_train_cat])
+    x_test = np.hstack([x_test_num_scaled, x_test_cat])
 
-    # Combine numerical and categorical
-    X_full = np.hstack([X_num_scaled, X_cat])
-    feature_names = FEATURES_NUM + list(cat_feature_names)
+    # Create the full list of feature names
+    full_feature_list = FEATURES_NUM + list(cat_feature_names)
 
-    return X_full, y, feature_names
+    print("\nFinal Processed Data Shapes:")
+    print(f"x_train shape: {x_train.shape}, x_test shape: {x_test.shape}")
+    print(f"Total features: {len(full_feature_list)}")
 
-def train_test_split_chronological(X, y, train_ratio=0.8):
-    # 1. Chronological train/test split
-    cutoff = int(len(X) * train_ratio)
-    X_train, X_test = X[:cutoff], X[cutoff:]
-    y_train, y_test = y[:cutoff], y[cutoff:]
+    return x_train, x_test, y_train, y_test, full_feature_list
 
-    print("Before SMOTE -> Train class distribution:\n",
-          pd.Series(y_train).value_counts(normalize=True))
+def run_lda(x_train, x_test, y_train, y_test, feature_names):
+    # Assuming x_train, x_test, y_train, y_test are defined from your previous steps
 
-    # 2. Apply SMOTE to the training set only
-    smote = SMOTE(random_state=42)
-    X_train_bal, y_train_bal = smote.fit_resample(X_train, y_train)
+    # ---------------------------------------
+    # 1. Define the LDA Classifier
+    # ---------------------------------------
+    lda_clf = LDA_Classifier()
 
-    (unique, counts) = np.unique(y_train_bal, return_counts=True)
-    print("After SMOTE -> Train class distribution:\n", dict(zip(unique, counts / counts.sum())))
+    # ---------------------------------------
+    # 2. Define the Hyperparameter Grid
+    # ---------------------------------------
+    # LDA generally has very few parameters to tune.
+    # - solver: 'svd' (default, no shrinkage), 'lsqr', or 'eigen'.
+    # - shrinkage: used with 'lsqr' or 'eigen' solvers.
+    param_grid = [
+        {
+            'solver': ['svd'],  # SVD does not support shrinkage
+            'shrinkage': [None]
+        },
+        {
+            'solver': ['lsqr'],  # LSQR supports shrinkage
+            'shrinkage': [None, 'auto', 0.1, 0.5, 0.9]  # Test no shrinkage, auto, and various fixed values
+        }
+    ]
 
-    print("Train shape:", X_train_bal.shape, "Test shape:", X_test.shape)
-    return X_train_bal, y_train_bal, X_test, y_test
+    # ---------------------------------------
+    # 3. Perform Grid Search
+    # ---------------------------------------
+    print("Starting LDA Grid Search...")
+    start_time = time.time()
 
-def evaluate_model(model, X_test, y_test, model_name="Model"):
-    y_pred = model.predict(X_test)
-    print(f"\n{model_name} Accuracy: {accuracy_score(y_test, y_pred):.4f}")
-    print(classification_report(y_test, y_pred))
-    cm = confusion_matrix(y_test, y_pred)
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-    plt.title(f"{model_name} Confusion Matrix")
-    plt.show()
-    return y_pred
-# -----------------------------
-# Helper function: plot confusion matrix
-# -----------------------------
-def plot_cm(y_true, y_pred, title="Confusion Matrix"):
-    cm = confusion_matrix(y_true, y_pred)
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-    plt.xlabel("Predicted")
-    plt.ylabel("Actual")
-    plt.title(title)
-    plt.show()
+    # Use cross-validation (cv=5) and n_jobs=-1 to speed up search
+    grid_search_lda = GridSearchCV(
+        estimator=lda_clf,
+        param_grid=param_grid,
+        scoring='accuracy',  # Maximize classification accuracy
+        cv=5,
+        verbose=1,
+        n_jobs=-1
+    )
 
-# -----------------------------
-# 1. Linear Discriminant Analysis
-# -----------------------------
-def run_lda(X_train, X_test, y_train, y_test):
-    lda = LinearDiscriminantAnalysis()
-    lda.fit(X_train, y_train)
-    y_pred = lda.predict(X_test)
-    print("=== LDA ===")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    if hasattr(lda, "coef_"):
-        print("Coefficients:", lda.coef_)
-    plot_cm(y_test, y_pred, "LDA Confusion Matrix")
+    grid_search_lda.fit(x_train, y_train)
 
-# -----------------------------
-# 2. Decision Tree
-# -----------------------------
-def run_decision_tree(X_train, X_test, y_train, y_test, **kwargs):
-    dt = DecisionTreeClassifier(**kwargs)
-    dt.fit(X_train, y_train)
-    y_pred = dt.predict(X_test)
-    print("=== Decision Tree ===")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    if hasattr(dt, "feature_importances_"):
-        print("Feature importances:", dt.feature_importances_)
-    plot_cm(y_test, y_pred, "Decision Tree Confusion Matrix")
+    end_time = time.time()
+    print(f"LDA Grid Search finished in {end_time - start_time:.2f} seconds.")
 
-# -----------------------------
-# 3. Logistic Regression
-# -----------------------------
-def run_logistic_regression(X_train, X_test, y_train, y_test, **kwargs):
-    lr = LogisticRegression(**kwargs)
-    lr.fit(X_train, y_train)
-    y_pred = lr.predict(X_test)
-    print("=== Logistic Regression ===")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    if hasattr(lr, "coef_"):
-        print("Coefficients:", lr.coef_)
-    plot_cm(y_test, y_pred, "Logistic Regression Confusion Matrix")
+    # ---------------------------------------
+    # 4. Evaluate Best Model
+    # ---------------------------------------
+    best_lda = grid_search_lda.best_estimator_
 
-# -----------------------------
-# 4. K-Nearest Neighbors
-# -----------------------------
-def run_knn(X_train, X_test, y_train, y_test, **kwargs):
-    knn = KNeighborsClassifier(**kwargs)
-    knn.fit(X_train, y_train)
-    y_pred = knn.predict(X_test)
-    print("=== KNN ===")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    plot_cm(y_test, y_pred, "KNN Confusion Matrix")
+    # Predict on the test set
+    y_pred_lda = best_lda.predict(x_test)
 
-# -----------------------------
-# 5. SVM
-# -----------------------------
-def run_svm(X_train, X_test, y_train, y_test, kernel="linear", **kwargs):
-    svm = SVC(kernel=kernel, **kwargs)
-    svm.fit(X_train, y_train)
-    y_pred = svm.predict(X_test)
-    print(f"=== SVM ({kernel}) ===")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    plot_cm(y_test, y_pred, f"SVM ({kernel}) Confusion Matrix")
+    print("\n--- LDA Classification Results ---")
+    print(f"Best LDA Parameters: {grid_search_lda.best_params_}")
+    print(f"Best CV Score (Accuracy): {grid_search_lda.best_score_:.4f}")
+    print(f"Test Set Accuracy: {accuracy_score(y_test, y_pred_lda):.4f}")
+    print("\nClassification Report (Test Set):\n", classification_report(y_test, y_pred_lda))
 
-# -----------------------------
-# 6. Naive Bayes
-# -----------------------------
-def run_naive_bayes(X_train, X_test, y_train, y_test):
-    nb = GaussianNB()
-    nb.fit(X_train, y_train)
-    y_pred = nb.predict(X_test)
-    print("=== Naive Bayes ===")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    plot_cm(y_test, y_pred, "Naive Bayes Confusion Matrix")
+def run_logistic_regression(x_train, x_test, y_train, y_test, feature_names):
+    # ---------------------------------------
+    # 1. Define the Logistic Regression Classifier
+    # ---------------------------------------
+    # Set max_iter to a higher value to ensure convergence, especially with LBFGS/Sag solvers
+    # random_state is set for reproducibility
+    log_reg_clf = LogisticRegression(solver='liblinear', random_state=42, max_iter=5000)
 
-# -----------------------------
-# 7. Random Forest
-# -----------------------------
-def run_random_forest(X_train, X_test, y_train, y_test, **kwargs):
-    rf = RandomForestClassifier(**kwargs)
-    rf.fit(X_train, y_train)
-    y_pred = rf.predict(X_test)
-    print("=== Random Forest ===")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    if hasattr(rf, "feature_importances_"):
-        print("Feature importances:", rf.feature_importances_)
-    plot_cm(y_test, y_pred, "Random Forest Confusion Matrix")
+    # ---------------------------------------
+    # 2. Define the Hyperparameter Grid
+    # ---------------------------------------
+    # C: Inverse of regularization strength (smaller C means stronger regularization)
+    # penalty: 'l1' or 'l2' (L1 for feature selection, L2 for general stability)
 
-# -----------------------------
-# 8. Neural Network (MLP)
-# -----------------------------
-def run_neural_network(X_train, X_test, y_train, y_test, **kwargs):
-    mlp = MLPClassifier(**kwargs)
-    mlp.fit(X_train, y_train)
-    y_pred = mlp.predict(X_test)
-    print("=== Neural Network (MLP) ===")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    plot_cm(y_test, y_pred, "MLP Confusion Matrix")
+    param_grid = [
+        {
+            'penalty': ['l1'],
+            # C values are tested on a logarithmic scale
+            'C': [0.01, 0.1, 1.0, 10.0],
+            'solver': ['liblinear']  # 'liblinear' supports both l1 and l2
+        },
+        {
+            'penalty': ['l2'],
+            'C': [0.01, 0.1, 1.0, 10.0],
+            'solver': ['lbfgs', 'liblinear']  # 'lbfgs' is generally good for l2
+        }
+    ]
 
+    # ---------------------------------------
+    # 3. Perform Grid Search (Cross-Validation)
+    # ---------------------------------------
+    print("\nStarting Logistic Regression Grid Search...")
+    start_time = time.time()
+
+    # Use 5-fold cross-validation (cv=5)
+    grid_search_log_reg = GridSearchCV(
+        estimator=log_reg_clf,
+        param_grid=param_grid,
+        scoring='accuracy',
+        cv=5,
+        verbose=1,
+        n_jobs=-1
+    )
+
+    grid_search_log_reg.fit(x_train, y_train)
+
+    end_time = time.time()
+    print(f"Logistic Regression Grid Search finished in {end_time - start_time:.2f} seconds.")
+
+    # ---------------------------------------
+    # 4. Evaluate Best Model
+    # ---------------------------------------
+    best_log_reg = grid_search_log_reg.best_estimator_
+
+    # Predict on the test set
+    y_pred_log_reg = best_log_reg.predict(x_test)
+
+    print("\n--- Logistic Regression Classification Results ---")
+    print(f"Best LR Parameters: {grid_search_log_reg.best_params_}")
+    print(f"Best CV Score (Accuracy): {grid_search_log_reg.best_score_:.4f}")
+    print(f"Test Set Accuracy: {accuracy_score(y_test, y_pred_log_reg):.4f}")
+    print("\nClassification Report (Test Set):\n", classification_report(y_test, y_pred_log_reg))
+
+def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
+    # ---------------------------------------
+    # 1. Define the Random Forest Classifier
+    # ---------------------------------------
+    # Default is n_estimators=100. Setting class_weight='balanced' addresses potential imbalance.
+    rf_clf = RandomForestClassifier(random_state=42, class_weight='balanced', n_jobs=-1)
+
+    # ---------------------------------------
+    # 2. Define the Hyperparameter Grid
+    # ---------------------------------------
+    # This grid focuses on parameters that control model complexity and diversity.
+    param_grid = {
+        # n_estimators: Number of trees in the forest.
+        'n_estimators': [100, 200, 300],
+        # max_depth: Maximum depth of the tree (controls individual tree complexity/pre-pruning).
+        'max_depth': [5, 10, None], # None means nodes are expanded until all leaves are pure
+        # min_samples_split: Minimum number of samples required to split an internal node.
+        'min_samples_split': [5, 10],
+        # max_features: Number of features to consider when looking for the best split (key to Bagging).
+        'max_features': ['sqrt', 0.5]
+    }
+
+    # ---------------------------------------
+    # 3. Perform Grid Search (Cross-Validation)
+    # ---------------------------------------
+    print("\nStarting Random Forest Grid Search (Bagging)...")
+    start_time = time.time()
+
+    # Use 5-fold cross-validation (cv=5) and n_jobs=-1 for parallel processing
+    grid_search_rf = GridSearchCV(
+        estimator=rf_clf,
+        param_grid=param_grid,
+        scoring='accuracy',
+        cv=5,
+        verbose=1,
+        n_jobs=-1
+    )
+
+    grid_search_rf.fit(x_train, y_train)
+
+    end_time = time.time()
+    print(f"Random Forest Grid Search finished in {end_time - start_time:.2f} seconds.")
+
+    # ---------------------------------------
+    # 4. Evaluate Best Model
+    # ---------------------------------------
+    best_rf = grid_search_rf.best_estimator_
+
+    # Predict on the test set
+    y_pred_rf = best_rf.predict(x_test)
+
+    print("\n--- Random Forest Classification Results (Bagging) ---")
+    print(f"Best RF Parameters: {grid_search_rf.best_params_}")
+    print(f"Best CV Score (Accuracy): {grid_search_rf.best_score_:.4f}")
+    print(f"Test Set Accuracy: {accuracy_score(y_test, y_pred_rf):.4f}")
+    print("\nClassification Report (Test Set):\n", classification_report(y_test, y_pred_rf))
+
+    return best_rf
 
 if __name__ == '__main__':
     # Load and preprocess
-    X, y, feature_names = load_and_prepare_data()
+    xTrain, xTest, yTrain, yTest, feature_names = load_and_prepare_data()
 
-    # Chronological split + SMOTE
-    X_train, y_train, X_test, y_test = train_test_split_chronological(X, y)
+    run_lda(xTrain, xTest, yTrain, yTest, feature_names)
 
-    # Run models
-    run_lda(X_train, X_test, y_train, y_test)
-    run_decision_tree(X_train, X_test, y_train, y_test, max_depth=5)
-    run_logistic_regression(X_train, X_test, y_train, y_test, max_iter=500)
-    run_random_forest(X_train, X_test, y_train, y_test, n_estimators=200)
-    run_neural_network(X_train, X_test, y_train, y_test, hidden_layer_sizes=(100, 50), max_iter=500)
-    run_knn(X_train, X_test, y_train, y_test, n_neighbors=7)
-    run_svm(X_train, X_test, y_train, y_test, kernel="rbf")
-    run_naive_bayes(X_train, X_test, y_train, y_test)
+    run_logistic_regression(xTrain, xTest, yTrain, yTest, feature_names)
 
-
+    run_random_forest(xTrain, xTest, yTrain, yTest, feature_names)

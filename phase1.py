@@ -633,6 +633,14 @@ def feature_engineering():
 
     print("Finished outlier winsorization.")
 
+    X_export = X.copy()
+    y_export = y.copy()
+
+    phaseII = X_export.copy()
+    phaseII[TARGET] = y_export
+
+    phaseII.to_csv("phaseII.csv", index=False)
+    print("Exported dataset ready for phaseII.")
 
     #Split the data
     cutoff = int(len(X) * 0.8)
