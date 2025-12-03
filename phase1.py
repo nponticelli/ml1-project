@@ -830,6 +830,135 @@ def feature_engineering():
         "feature_names": full_feature_list
     }
 
+from collections import defaultdict
+import pandas as pd
+
+def compute_service_stats_v2(df, window=5):
+    # 1. Initialize Histories
+    service_hist = defaultdict(list)
+    return_hist = defaultdict(list)
+    first_serve_hist = defaultdict(list)
+    ace_hist = defaultdict(list)  # <--- New Ace History
+
+    # 2. Initialize Output Lists
+    playerA_adv = []
+    playerB_adv = []
+    playerA_first_pct = []
+    playerB_first_pct = []
+    playerA_ace_pct = []  # <--- New List
+    playerB_ace_pct = []  # <--- New List
+
+    # Ensure chronological order
+    df = df.sort_values('pseudo_date').reset_index(drop=True)
+
+    # 3. Single Helper Function for Weighted Averages
+    def get_weighted_avg(hist, player_id, default_val):
+        """
+        Calculates weighted rolling average based on history.
+        weight = i (linear), where i=1 is the most recent match.
+        """
+        last_matches = hist[player_id][-window:]
+        
+        if not last_matches:
+            return default_val
+            
+        total_numerator = 0
+        total_denominator = 0
+        
+        # Iterate backwards (most recent first) but apply weights linearly 
+        # (oldest=1, newest=window is usually better, but let's stick to your logic:
+        # Your logic was: reversed(last_matches) with enumerate 1..N.
+        # This gives the *most recent* match a weight of 1 and the *oldest* a higher weight? 
+        # WAIT: Let's correct the weighting logic to standard "Recency Bias".
+        # Standard: Newest match gets highest weight.
+        
+        # CORRECTED LOGIC:
+        # 1. Take last N matches.
+        # 2. Iterate normal order (Oldest -> Newest).
+        # 3. Weight increases with index.
+        
+        for i, (val, total) in enumerate(last_matches, 1):
+            weight = i  # Oldest match in window = 1, Newest = 5
+            total_numerator += val * weight
+            total_denominator += total * weight
+            
+        return total_numerator / total_denominator if total_denominator > 0 else default_val
+
+    # 4. Iterate through matches
+    # Using itertuples for speed as discussed
+    for row in df.itertuples():
+        playerA, playerB = row.playerA_id, row.playerB_id
+
+        # --- EXTRACT CURRENT STATS ---
+        
+        # Service & Return Points
+        pA_sv_won = row.playerA_1stWon + row.playerA_2ndWon
+        pA_sv_tot = row.playerA_svpt
+        pB_sv_won = row.playerB_1stWon + row.playerB_2ndWon
+        pB_sv_tot = row.playerB_svpt
+
+        pA_ret_won = pB_sv_tot - pB_sv_won
+        pB_ret_won = pA_sv_tot - pA_sv_won
+
+        # First Serve In
+        pA_1st_in = row.playerA_1stIn
+        pB_1st_in = row.playerB_1stIn
+
+        # Aces (New)
+        pA_aces = row.playerA_ace
+        pB_aces = row.playerB_ace
+
+        # --- CALCULATE PRE-MATCH METRICS (Using History) ---
+
+        # 1. Service Advantage (Default 0.5)
+        pA_srv_perf = get_weighted_avg(service_hist, playerA, 0.5)
+        pB_ret_perf = get_weighted_avg(return_hist, playerB, 0.5)
+        playerA_adv.append(pA_srv_perf - pB_ret_perf)
+
+        pB_srv_perf = get_weighted_avg(service_hist, playerB, 0.5)
+        pA_ret_perf = get_weighted_avg(return_hist, playerA, 0.5)
+        playerB_adv.append(pB_srv_perf - pA_ret_perf)
+
+        # 2. First Serve % (Default 0.65)
+        playerA_first_pct.append(get_weighted_avg(first_serve_hist, playerA, 0.65))
+        playerB_first_pct.append(get_weighted_avg(first_serve_hist, playerB, 0.65))
+
+        # 3. Ace % (Default 0.05 or 5%) <--- New Calculation
+        # We use 0.05 as a neutral starting point for aces
+        playerA_ace_pct.append(get_weighted_avg(ace_hist, playerA, 0.05))
+        playerB_ace_pct.append(get_weighted_avg(ace_hist, playerB, 0.05))
+
+        # --- UPDATE HISTORY (Post-Match) ---
+        
+        service_hist[playerA].append((pA_sv_won, pA_sv_tot))
+        service_hist[playerB].append((pB_sv_won, pB_sv_tot))
+
+        return_hist[playerA].append((pA_ret_won, pB_sv_tot))
+        return_hist[playerB].append((pB_ret_won, pA_sv_tot))
+
+        first_serve_hist[playerA].append((pA_1st_in, pA_sv_tot))
+        first_serve_hist[playerB].append((pB_1st_in, pB_sv_tot))
+
+        # Update Ace History
+        ace_hist[playerA].append((pA_aces, pA_sv_tot))
+        ace_hist[playerB].append((pB_aces, pB_sv_tot))
+
+    # 5. Assign Columns
+    df['playerA_service_advantage'] = playerA_adv
+    df['playerB_service_advantage'] = playerB_adv
+    df['service_advantage_diff'] = df['playerA_service_advantage'] - df['playerB_service_advantage']
+
+    df['playerA_first_serve_pct'] = playerA_first_pct
+    df['playerB_first_serve_pct'] = playerB_first_pct
+    df['first_serve_pct_diff'] = df['playerA_first_serve_pct'] - df['playerB_first_serve_pct']
+
+    # New Ace Columns
+    df['playerA_ace_pct'] = playerA_ace_pct
+    df['playerB_ace_pct'] = playerB_ace_pct
+    df['ace_pct_diff'] = df['playerA_ace_pct'] - df['playerB_ace_pct']
+
+    return df
+
 if __name__ == '__main__':
     #data_cleaning()
     feature_engineering()
