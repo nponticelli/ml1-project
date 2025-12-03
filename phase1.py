@@ -207,6 +207,7 @@ def create_rank_order_features(df, seed = 42):
             "surface": row["surface"],
             "match_num": row["match_num"],
             "minutes": row["minutes"],
+            "clean_score": row["clean_score"],
         }
         if val:
             new_row.update({
@@ -272,10 +273,17 @@ def create_rank_order_features(df, seed = 42):
                 "playerB_bpFaced": row["w_bpFaced"],
             })
 
+        new_row['playerA_points_won'] = new_row['playerA_1stWon'] + new_row['playerA_2ndWon'] + (new_row['playerB_svpt'] - new_row['playerB_1stWon'] - new_row['playerB_2ndWon'])
+        new_row['total_points'] = (new_row['playerA_svpt'] + new_row['playerB_svpt'])
+        new_row['playerA_points_won_pct'] = round(new_row['playerA_points_won'] / new_row['total_points'],4)
+        new_row['playerB_points_won_pct'] = 1 - new_row['playerA_points_won_pct']
+
         if row['winner_id'] == new_row['playerA_id']:
             new_row['log_target'] = 1
+            new_row['game_diff'] = row['game_diff']
         else:
             new_row['log_target'] = 0
+            new_row['game_diff'] = -row['game_diff']
         return pd.Series(new_row)
     df_new = df.apply(reorder, axis=1).reset_index(drop=True)
     return df_new
@@ -613,10 +621,12 @@ def feature_engineering():
         "service_advantage_diff",
     ]
     FEATURES_CAT = ["rusty_diff", "best_of"]
-    TARGET = "log_target"
+    LOG_TARGET = "log_target"
+    LIN_TARGET = df["playerA_points_won_pct"]
+    LIN_TARGET2 = df["minutes"]
 
     X = df[FEATURES_NUM + FEATURES_CAT].copy()
-    y = df[TARGET].copy()
+    y = df[LOG_TARGET].copy()
 
     print("Selected feature matrix shape:", X.shape)
 
@@ -637,7 +647,9 @@ def feature_engineering():
     y_export = y.copy()
 
     phaseII = X_export.copy()
-    phaseII[TARGET] = y_export
+    phaseII[LOG_TARGET] = y_export
+    phaseII["playerA_points_won_pct"] = LIN_TARGET
+    phaseII["minutes"] = LIN_TARGET2
 
     phaseII.to_csv("phaseII.csv", index=False)
     print("Exported dataset ready for phaseII.")
