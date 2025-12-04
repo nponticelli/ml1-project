@@ -26,67 +26,44 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 
-def load_and_prepare_data(file_path="phaseII.csv"):
-    # Load dataset
-    df = pd.read_csv(file_path)
-    FEATURES_NUM = [
-        "combined_elo_diff",
-        "ace_pct_diff",
-        "fatigue_10d_diff",
-        "year_fatigue_diff",
-        "raw_age_diff",
-        "prime_age_diff",
-        "raw_height_diff",
-        "prime_height_diff",
-        "service_advantage_diff",
-    ]
-    FEATURES_CAT = ["rusty_diff", "best_of"]
-    TARGET = "log_target"
+def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL CHANGE: Load the final PCA file
 
-    X = df[FEATURES_NUM + FEATURES_CAT].copy()
+    df = pd.read_csv(file_path)
+
+    # 7 Numerical PCs + 3 Categorical features = 10 total features (if 7 PC)
+    # If you reduced to 6 PCs, this list should be PC1 to PC6 + the 3 OHE features.
+    # Let's assume 6 PCs for the reduced model:
+    FEATURES_ALL = [
+        "PC1", "PC2", "PC3", "PC4", "PC5", "PC6",
+        "rusty_diff_0.0", "rusty_diff_1.0", "best_of_5"
+    ]
+    TARGET = "log_target"  # Assuming this is your binary target (0/1)
+
+    # ---------------------------------------
+    # 1. Select features
+    # ---------------------------------------
+    # Features are already scaled and encoded from Phase I pipeline
+    X = df[FEATURES_ALL].copy()
     Y = df[TARGET].copy()
-    # Split the data
+
+    # ---------------------------------------
+    # 2. Split the data
+    # ---------------------------------------
     cutoff = int(len(X) * 0.8)
-    x_train_raw, x_test_raw = X[:cutoff], X[cutoff:]
+    x_train, x_test = X[:cutoff], X[cutoff:]  # Use final names directly
     y_train, y_test = Y[:cutoff], Y[cutoff:]
 
     print("Train/Test Split Complete:")
-    print(f"x_train_raw shape: {x_train_raw.shape}, x_test_raw shape: {x_test_raw.shape}")
+    print(f"x_train shape: {x_train.shape}, x_test shape: {x_test.shape}")
 
-    scaler = StandardScaler()
-
-    # FIT the scaler ONLY on the training data
-    x_train_num_scaled = scaler.fit_transform(x_train_raw[FEATURES_NUM])
-    # TRANSFORM the test data using the TR AINING fit
-    x_test_num_scaled = scaler.transform(x_test_raw[FEATURES_NUM])
-
-    # Encoder
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore", drop='first')
-
-    # FIT the encoder ONLY on the training data
-    x_train_cat = encoder.fit_transform(x_train_raw[FEATURES_CAT])
-    # TRANSFORM the test data using the TRAINING fit
-    x_test_cat = encoder.transform(x_test_raw[FEATURES_CAT])
-
-    # Get feature names for final list
-    cat_feature_names = encoder.get_feature_names_out(FEATURES_CAT)
-
-    # ---------------------------------------
-    # 4. Combine into final feature matrices
-    # ---------------------------------------
-    # Stack the scaled numerical features and the encoded categorical features
-    x_train = np.hstack([x_train_num_scaled, x_train_cat])
-    x_test = np.hstack([x_test_num_scaled, x_test_cat])
-
-    # Create the full list of feature names
-    full_feature_list = FEATURES_NUM + list(cat_feature_names)
+    full_feature_list = FEATURES_ALL
 
     print("\nFinal Processed Data Shapes:")
     print(f"x_train shape: {x_train.shape}, x_test shape: {x_test.shape}")
     print(f"Total features: {len(full_feature_list)}")
 
-    return x_train, x_test, y_train, y_test, full_feature_list
-
+    return x_train.values, x_test.values, y_train, y_test, full_feature_list
+    # Note: Returning .values for x_train/x_test to match np.hstack output format
 
 def run_lda(x_train, x_test, y_train, y_test, feature_names):
     """
@@ -137,8 +114,6 @@ def run_lda(x_train, x_test, y_train, y_test, feature_names):
     y_pred = best_model.predict(x_test)
 
     # Get probabilities for ROC curve (Class 1)
-    # Note: LDA can only predict proba if the assumptions are met or using specific solvers,
-    # but sklearn handles this for standard LDA.
     try:
         y_prob = best_model.predict_proba(x_test)[:, 1]
     except AttributeError:
@@ -178,20 +153,19 @@ def run_lda(x_train, x_test, y_train, y_test, feature_names):
     # 5. Visualizations
     # ---------------------------------------
 
-    # Create an SVD-based LDA model specifically for projection visualization,
-    # as the best_model (potentially 'lsqr') doesn't support .transform().
+    # Create an SVD-based LDA model specifically for projection visualization
     lda_visualizer = LinearDiscriminantAnalysis(solver='svd')
     lda_visualizer.fit(x_train, y_train)
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    # Plot 1: Confusion Matrix (Uses best_model)
+    # Plot 1: Confusion Matrix
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0])
     axes[0].set_title("Confusion Matrix")
     axes[0].set_xlabel("Predicted Label")
     axes[0].set_ylabel("True Label")
 
-    # Plot 2: ROC Curve (Uses y_prob from best_model)
+    # Plot 2: ROC Curve
     axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
     axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
     axes[1].set_xlim([0.0, 1.0])
@@ -201,11 +175,8 @@ def run_lda(x_train, x_test, y_train, y_test, feature_names):
     axes[1].set_title('ROC Curve')
     axes[1].legend(loc="lower right")
 
-    # Plot 3: LDA Separation (Fisher Criterion Visualization)
-    # Project data using the lda_visualizer (SVD solver)
+    # Plot 3: LDA Separation
     x_test_lda = lda_visualizer.transform(x_test)
-
-    # Create a DataFrame for plotting
     lda_df = pd.DataFrame({'LDA Component': x_test_lda.flatten(), 'Target': y_test})
 
     sns.histplot(data=lda_df, x='LDA Component', hue='Target', element="step", stat="density", common_norm=False,
@@ -214,7 +185,13 @@ def run_lda(x_train, x_test, y_train, y_test, feature_names):
     axes[2].set_xlabel("Discriminant Value")
 
     plt.tight_layout()
-    plt.show()
+
+    # 🚨 ADDED: Automatically save the combined figure
+    plt.savefig('lda_analysis_visuals.png')
+
+    # Keep plt.show() if you still want the plot to pop up
+    # plt.show()
+
     # ---------------------------------------
     # 6. Return Data for Comparison Table
     # ---------------------------------------
@@ -226,9 +203,9 @@ def run_lda(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": grid_search.best_params_
+        "Best Params": grid_search.best_params_,
+        "Best Model": best_model,
     }
-
 
 def run_logistic_regression(x_train, x_test, y_train, y_test, feature_names):
     """
@@ -331,7 +308,11 @@ def run_logistic_regression(x_train, x_test, y_train, y_test, feature_names):
     axes[1].legend(loc="lower right")
 
     plt.tight_layout()
-    plt.show()
+
+    # 🚨 ADDED: Automatically save the combined figure
+    plt.savefig('logistic_regression_visuals.png')
+
+    #plt.show()
 
     # ---------------------------------------
     # 6. Return Data for Comparison Table
@@ -344,9 +325,9 @@ def run_logistic_regression(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": grid_search.best_params_
+        "Best Params": grid_search.best_params_,
+        "Best Model": best_model,
     }
-
 
 def run_decision_tree(x_train, x_test, y_train, y_test, feature_names):
     """
@@ -468,7 +449,10 @@ def run_decision_tree(x_train, x_test, y_train, y_test, feature_names):
     ax3.set_title(f"Optimized Decision Tree (Depth: {best_model.max_depth})")
 
     plt.tight_layout()
-    plt.show()
+    # 🚨 CHANGE: Save the plot instead of showing it
+    plt.savefig('decision_tree_analysis_visuals.png')
+
+    # plt.show() # Removed to only save the plot
 
     # ---------------------------------------
     # 6. Return Data for Comparison Table
@@ -481,9 +465,10 @@ def run_decision_tree(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": grid_search.best_params_
+        "Best Params": grid_search.best_params_,
+        # 💡 ADDED: Return the fitted model object for combined ROC plotting
+        "Best Model": best_model
     }
-
 
 def run_pre_pruned_tree(x_train, x_test, y_train, y_test, feature_names):
     """
@@ -571,6 +556,7 @@ def run_pre_pruned_tree(x_train, x_test, y_train, y_test, feature_names):
     # ---------------------------------------
     # 5. Visualizations
     # ---------------------------------------
+    #
 
     fig, axes = plt.subplots(1, 3, figsize=(22, 6))
 
@@ -601,7 +587,8 @@ def run_pre_pruned_tree(x_train, x_test, y_train, y_test, feature_names):
     axes[2].set_title(f"Optimized Pre-Pruned Tree (Depth: {best_model.max_depth})")
 
     plt.tight_layout()
-    plt.show()
+    # 🚨 CHANGE: Save the plot instead of showing it
+    plt.savefig('pre_pruned_dt_analysis_visuals.png')
 
     # ---------------------------------------
     # 6. Return Data for Comparison Table
@@ -614,9 +601,9 @@ def run_pre_pruned_tree(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": grid_search.best_params_
+        "Best Params": grid_search.best_params_,
+        "Best Model": best_model
     }
-
 
 def run_post_prune_tree(x_train, x_test, y_train, y_test, feature_names):
     """
@@ -675,7 +662,10 @@ def run_post_prune_tree(x_train, x_test, y_train, y_test, feature_names):
     plt.title("Post-Pruning: CV Accuracy vs. Alpha Value")
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.6)
-    plt.show()
+
+    # 🚨 CHANGE: Save the Alpha vs. Accuracy plot
+    plt.savefig('post_pruned_dt_alpha_vs_accuracy.png')
+    plt.close()  # Close the figure to free memory
 
     print(f"\nOptimal Alpha based on 5-Fold CV: {best_alpha:.6f}")
 
@@ -690,7 +680,7 @@ def run_post_prune_tree(x_train, x_test, y_train, y_test, feature_names):
     y_pred = best_model.predict(x_test)
     y_prob = best_model.predict_proba(x_test)[:, 1]
 
-    # ... (rest of metric and visualization code remains the same) ...
+    # ... (rest of metric calculation code) ...
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = cm.ravel()
 
@@ -733,7 +723,8 @@ def run_post_prune_tree(x_train, x_test, y_train, y_test, feature_names):
     axes[1].legend(loc="lower right")
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig('post_pruned_dt_cm_roc_visuals.png')
+    # plt.show() # Removed
 
     # ---------------------------------------
     # 6. Return Data for Comparison Table
@@ -746,15 +737,15 @@ def run_post_prune_tree(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": {'ccp_alpha': best_alpha}
+        "Best Params": {'ccp_alpha': best_alpha},
+        "Best Model": best_model
     }
-
 
 def run_knn(x_train, x_test, y_train, y_test, feature_names):
     """
     Runs K-Nearest Neighbors (KNN) with hyperparameter optimization (K),
     Elbow Method visualization, and full evaluation.
-    Returns a dictionary of metrics for the comparison table.
+    Returns a dictionary of metrics for the comparison table, including the "Best Model".
     """
 
     # ---------------------------------------
@@ -764,7 +755,7 @@ def run_knn(x_train, x_test, y_train, y_test, feature_names):
     knn_clf = KNeighborsClassifier()
 
     # Range of K values to search for the Elbow Method
-    k_range = list(range(1, 22, 2))
+    k_range = list(range(1, 26, 2))
 
     # Define the Hyperparameter Grid for GridSearchCV (Formal Optimization)
     param_grid = {
@@ -802,17 +793,10 @@ def run_knn(x_train, x_test, y_train, y_test, feature_names):
     # 3. Elbow Method Visualization (Finding Optimum K) 📈
     # ---------------------------------------
 
-    # Extract mean cross-validation scores for each K value (across all other parameters)
-    # The elbow method typically plots accuracy vs K, often ignoring other tuning parameters.
-
     # Calculate Mean CV Score for each K (using the best non-K parameters found by GridSearchCV)
-    mean_scores = grid_search.cv_results_['mean_test_score']
-
-    # Restructure scores to average over the other parameters for a clean K vs Accuracy plot
-    # The structure depends on param_grid order, so let's simplify by running a dedicated loop:
-
     k_scores = []
     for k in k_range:
+        # Use the best non-K parameters found by GS for a fair comparison across K
         knn_temp = KNeighborsClassifier(n_neighbors=k,
                                         weights=grid_search.best_params_['weights'],
                                         metric=grid_search.best_params_['metric'])
@@ -825,10 +809,13 @@ def run_knn(x_train, x_test, y_train, y_test, feature_names):
     plt.xlabel("Number of Neighbors (K)")
     plt.ylabel("Mean 5-Fold Cross-Validation Accuracy")
     plt.title("KNN Elbow Method: Optimizing K")
-    plt.xticks(k_range[::2])
+    plt.xticks(k_range)
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.6)
-    plt.show()  #
+
+    # 🚨 CHANGE: Save the Elbow Method plot
+    plt.savefig('knn_elbow_method.png')
+    plt.close()  # Close the figure to free memory
 
     # ---------------------------------------
     # 4. Final Predictions and Metrics
@@ -883,7 +870,9 @@ def run_knn(x_train, x_test, y_train, y_test, feature_names):
     axes[1].legend(loc="lower right")
 
     plt.tight_layout()
-    plt.show()
+    # 🚨 CHANGE: Save the CM/ROC plot
+    plt.savefig('knn_cm_roc_visuals.png')
+    # plt.show() # Removed
 
     # ---------------------------------------
     # 6. Return Data for Comparison Table
@@ -896,7 +885,9 @@ def run_knn(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": grid_search.best_params_
+        "Best Params": grid_search.best_params_,
+        # 🚨 CHANGE: Return the fitted model object using the key "Best Model"
+        "Best Model": best_model
     }
 
 
@@ -904,7 +895,7 @@ def run_svm(x_train, x_test, y_train, y_test, feature_names):
     """
     Runs Support Vector Machine (SVM) with Grid Search over Linear, Poly, and RBF kernels,
     and performs full evaluation.
-    Returns a dictionary of metrics for the comparison table.
+    Returns a dictionary of metrics for the comparison table, including the "Best Model".
     """
 
     # ---------------------------------------
@@ -1005,7 +996,9 @@ def run_svm(x_train, x_test, y_train, y_test, feature_names):
     axes[1].legend(loc="lower right")
 
     plt.tight_layout()
-    plt.show()
+    # 🚨 CHANGE: Save the plot instead of showing it
+    plt.savefig('svm_cm_roc_visuals.png')
+    # plt.show() # Removed
 
     # ---------------------------------------
     # 5. Return Data for Comparison Table
@@ -1018,7 +1011,9 @@ def run_svm(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": grid_search.best_params_
+        "Best Params": grid_search.best_params_,
+        # 🚨 CHANGE: Return the fitted model object using the key "Best Model"
+        "Best Model": best_model
     }
 
 
@@ -1026,13 +1021,12 @@ def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
     """
     Runs Multi-Layered Perceptron (MLP) with Randomized Search, evaluation,
     and saves visual plots.
-    Returns a dictionary of metrics for the comparison table.
+    Returns a dictionary of metrics for the comparison table, including the "Best Model".
     """
 
     # Define filenames for saving plots
     classifier_name = "MLP_Neural_Network"
-    cm_filename = f"{classifier_name}_Confusion_Matrix.png"
-    roc_filename = f"{classifier_name}_ROC_Curve.png"
+    output_filename = f"{classifier_name}_Visuals.png"
 
     # ---------------------------------------
     # 1. Setup Stratified K-Fold & Hyperparams
@@ -1132,10 +1126,6 @@ def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
     cm_display.plot(ax=axes[0], cmap='cividis')
     axes[0].set_title("Optimized MLP Confusion Matrix")
 
-    # Save Confusion Matrix
-    cm_display.figure_.savefig(cm_filename, bbox_inches='tight')
-    print(f"Saved Confusion Matrix to: {cm_filename}")
-
     # Plot 2: ROC Curve
     axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
     axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
@@ -1146,12 +1136,11 @@ def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
     axes[1].set_title('ROC Curve')
     axes[1].legend(loc="lower right")
 
-
     plt.tight_layout()
-    # Save ROC Curve
-    plt.savefig(roc_filename, bbox_inches='tight')
-    print(f"Saved ROC Curve to: {roc_filename}")
-    plt.show()
+    # 🚨 CHANGE: Save the combined figure and remove plt.show()
+    plt.savefig(output_filename)
+    print(f"Saved Confusion Matrix and ROC Curve to: {output_filename}")
+    # plt.show() # Removed
 
     # ---------------------------------------
     # 5. Return Data for Comparison Table
@@ -1164,7 +1153,9 @@ def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": random_search.best_params_
+        "Best Params": random_search.best_params_,
+        # 🚨 CHANGE: Return the fitted model object using the key "Best Model"
+        "Best Model": best_model
     }
 
 def run_naive_bayes(x_train, x_test, y_train, y_test, feature_names):
@@ -1278,7 +1269,7 @@ def run_naive_bayes(x_train, x_test, y_train, y_test, feature_names):
     # Save ROC Curve
     plt.savefig(roc_filename, bbox_inches='tight')
     print(f"Saved ROC Curve to: {roc_filename}")
-    plt.show()
+    #plt.show()
 
     # ---------------------------------------
     # 5. Return Data for Comparison Table
@@ -1291,21 +1282,20 @@ def run_naive_bayes(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": grid_search.best_params_
+        "Best Params": grid_search.best_params_,
+        "Best Model": best_model,
     }
-
 
 def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
     """
     Runs Random Forest (Bagging) with Randomized Search, evaluation,
     and saves visual plots.
-    Returns a dictionary of metrics for the comparison table.
+    Returns a dictionary of metrics for the comparison table, including the "Best Model".
     """
 
     # Define filenames for saving plots
     classifier_name = "Random_Forest"
-    cm_filename = f"{classifier_name}_Confusion_Matrix.png"
-    roc_filename = f"{classifier_name}_ROC_Curve.png"
+    output_filename = f"{classifier_name}_Visuals.png"
 
     # ---------------------------------------
     # 1. Setup Stratified K-Fold & Hyperparams
@@ -1392,10 +1382,6 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
     cm_display.plot(ax=axes[0], cmap='YlGnBu')
     axes[0].set_title("Random Forest Confusion Matrix")
 
-    # Save Confusion Matrix
-    cm_display.figure_.savefig(cm_filename, bbox_inches='tight')
-    print(f"Saved Confusion Matrix to: {cm_filename}")
-
     # Plot 2: ROC Curve
     axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
     axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
@@ -1407,10 +1393,10 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
     axes[1].legend(loc="lower right")
 
     plt.tight_layout()
-    # Save ROC Curve
-    plt.savefig(roc_filename, bbox_inches='tight')
-    print(f"Saved ROC Curve to: {roc_filename}")
-    plt.show()
+    # 🚨 CHANGE: Save the combined figure once and remove plt.show()
+    plt.savefig(output_filename)
+    print(f"Saved Confusion Matrix and ROC Curve to: {output_filename}")
+    # plt.show() # Removed
 
     # ---------------------------------------
     # 5. Return Data for Comparison Table
@@ -1423,31 +1409,100 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
         "Specificity": specificity,
         "F-Score": f1,
         "AUC": roc_auc,
-        "Best Params": random_search.best_params_
+        "Best Params": random_search.best_params_,
+        # 🚨 CHANGE: Return the fitted model object using the key "Best Model"
+        "Best Model": best_model
     }
+def plot_all_roc_curves(models_and_names, X_test, y_test):
+    """
+    Generates and saves a single plot showing the ROC curves for multiple models.
+
+    Args:
+        models_and_names (dict): A dictionary mapping model names to fitted model objects.
+        X_test (np.array): The test feature matrix.
+        y_test (np.array): The test target vector.
+    """
+    plt.figure(figsize=(10, 8))
+
+    # Plot the baseline random curve
+    plt.plot([0, 1], [0, 1], 'k--', label='Random (AUC = 0.50)')
+
+    for name, model in models_and_names.items():
+        # Get prediction probabilities for the positive class (Class 1)
+        try:
+            # Check if the model has predict_proba (most classifiers do)
+            y_prob = model.predict_proba(X_test)[:, 1]
+        except AttributeError:
+            # Fallback for models like some LDA solvers
+            y_prob = model.decision_function(X_test)
+
+        # Calculate ROC curve metrics
+        fpr, tpr, _ = roc_curve(y_test, y_prob)
+        roc_auc = auc(fpr, tpr)
+
+        # Plot the curve
+        plt.plot(fpr, tpr, lw=2, label=f'{name} (AUC = {roc_auc:.4f})')
+
+    # Final plot styling and saving
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate (1 - Specificity)')
+    plt.ylabel('True Positive Rate (Sensitivity)')
+    plt.title('Receiver Operating Characteristic (ROC) Comparison')
+    plt.legend(loc="lower right")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('all_models_roc_comparison.png')
+    plt.show()
+    print("Saved combined ROC curve plot to 'all_models_roc_comparison.png'.")
 
 if __name__ == '__main__':
     # Load and preprocess
     xTrain, xTest, yTrain, yTest, feature_names = load_and_prepare_data()
 
-    #run_lda(xTrain, xTest, yTrain, yTest, feature_names)
+    lda_results = run_lda(xTrain, xTest, yTrain, yTest, feature_names)
+    print("LDA Results: ", lda_results)
 
-    #run_logistic_regression(xTrain, xTest, yTrain, yTest, feature_names)
+    log_reg_results = run_logistic_regression(xTrain, xTest, yTrain, yTest, feature_names)
+    print("Logistic Regression Results: ", log_reg_results)
 
-    #run_decision_tree(xTrain, xTest, yTrain, yTest, feature_names)
+    decision_tree_results = run_decision_tree(xTrain, xTest, yTrain, yTest, feature_names)
+    print("Decision Tree Results: ", decision_tree_results)
 
-    #run_pre_pruned_tree(xTrain, xTest, yTrain, yTest, feature_names)
+    pre_pruned_tree_results = run_pre_pruned_tree(xTrain, xTest, yTrain, yTest, feature_names)
+    print("Pre-pruned Tree Results: ", pre_pruned_tree_results)
 
-    #run_post_prune_tree(xTrain, xTest, yTrain, yTest, feature_names)
+    post_prune_tree_results = run_post_prune_tree(xTrain, xTest, yTrain, yTest, feature_names)
+    print("Post-pruned Tree Results: ", post_prune_tree_results)
 
-    #run_knn(xTrain, xTest, yTrain, yTest, feature_names)
+    knn_results = run_knn(xTrain, xTest, yTrain, yTest, feature_names)
+    print("KNN Results: ", knn_results)
 
-    #run_random_forest(xTrain, xTest, yTrain, yTest, feature_names)
+    random_forest_results = run_random_forest(xTrain, xTest, yTrain, yTest, feature_names)
+    print("Random Forest Results: ", random_forest_results)
 
-    #run_svm(xTrain, xTest, yTrain, yTest, feature_names)
+    svm_results = run_svm(xTrain, xTest, yTrain, yTest, feature_names)
+    print("SVM Results: ", svm_results)
 
-    #run_naive_bayes(xTrain, xTest, yTrain, yTest, feature_names)
+    naive_bayes_results = run_naive_bayes(xTrain, xTest, yTrain, yTest, feature_names)
+    print("Naive Bayes Results: ", naive_bayes_results)
 
-    #run_mlp_neural_network(xTrain, xTest, yTrain, yTest, feature_names)
+    neural_net_results = run_mlp_neural_network(xTrain, xTest, yTrain, yTest, feature_names)
+    print("MLP Neural Network Results: ", neural_net_results)
 
-    run_random_forest(xTrain, xTest, yTrain, yTest, feature_names)
+    models_to_plot = {
+        "LDA": lda_results["Best Model"],
+        "Logistic Regression": log_reg_results["Best Model"],
+        "Decision Tree": decision_tree_results["Best Model"],
+        "Pre-pruned Tree": pre_pruned_tree_results["Best Model"],
+        "Post-pruned Tree": post_prune_tree_results["Best Model"],
+        "KNN": knn_results["Best Model"],
+        "Random Forest": random_forest_results["Best Model"],
+        "SVM": svm_results["Best Model"],
+        "Naive Bayes": naive_bayes_results["Best Model"],
+        "MLP Neural Network": neural_net_results["Best Model"],
+
+
+    }
+
+    plot_all_roc_curves(models_to_plot, xTest, yTest)
