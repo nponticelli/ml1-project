@@ -3,7 +3,7 @@ import random
 import pandas as pd
 import numpy as np
 import re
-
+from collections import defaultdict
 from scipy.stats._mstats_basic import winsorize
 from sklearn.inspection import permutation_importance
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -730,7 +730,7 @@ def feature_engineering():
     # 1. Load dataset
     # ---------------------------------------
     df = pd.read_csv("data_cleaned_shuffled.csv")
-    df = df.sort_values("pseudo_date").reset_index(drop=True)
+    df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
     df = df.iloc[3000:].reset_index(drop=True)  # warm-up drop
 
     # ---------------------------------------
@@ -741,9 +741,8 @@ def feature_engineering():
         "ace_pct_diff",
         "fatigue_10d_diff",
         "year_fatigue_diff",
-        "raw_age_diff",
         "prime_age_diff",
-        "raw_height_diff",
+        "raw_age_diff",
         "prime_height_diff",
         "service_advantage_diff",
     ]
@@ -860,7 +859,8 @@ def feature_engineering():
     # 10. PCA (numerical only)
     # ---------------------------------------
     pca = PCA(n_components=len(FEATURES_NUM))
-    X_pca = pca.fit_transform(X_train_num_scaled)
+    X_train_pca = pca.fit_transform(X_train_num_scaled)
+    X_test_pca = pca.transform(X_test_num_scaled)
     print("\nPCA explained variance ratio:", pca.explained_variance_ratio_)
     explained_variance_ratio = np.array(pca.explained_variance_ratio_)
     # Calculate the cumulative explained variance
@@ -877,7 +877,7 @@ def feature_engineering():
     plt.plot(components, cumulative_variance, marker='o', linestyle='-', color='purple')
 
     # Add 90% target line (you can change 0.90 to 0.95 or another target)
-    target_variance = 0.90
+    target_variance = 0.95
     n_components_target = np.argmax(cumulative_variance >= target_variance) + 1
 
     plt.axhline(y=target_variance, color='r', linestyle='--', label=f'{target_variance*100:.0f}% Variance')
@@ -896,20 +896,18 @@ def feature_engineering():
 
     plt.savefig('your_actual_cumulative_explained_variance_plot.png')
 
-
-
-
     # ---------------------------------------
     # 11. LDA (full feature set)
     # ---------------------------------------
     lda = LDA(n_components=1)
-    X_lda = lda.fit_transform(X_train, y_train)
+    X_train_lda = lda.fit_transform(X_train, y_train)
+    X_test_lda = lda.transform(X_test)
 
     print("LDA explained variance:", lda.explained_variance_ratio_)
 
     plt.figure(figsize=(8, 4))
-    plt.hist(X_lda[y_train == 1], alpha=.5, label="Player A wins (1)")
-    plt.hist(X_lda[y_train == 0], alpha=.5, label="Player B wins (0)")
+    plt.hist(X_train_lda[y_train == 1], alpha=.5, label="Player A wins (1)")
+    plt.hist(X_train_lda[y_train == 0], alpha=.5, label="Player B wins (0)")
     plt.legend()
     plt.title("LDA projection (LD1)")
     plt.show()
@@ -946,20 +944,121 @@ def feature_engineering():
     print("\nRandom Forest Feature Importances:")
     print(fi_df)
 
-    return {
-        "X_train": X_train,
-        "X_test": X_test,
-        "y_train": y_train,
-        "y_test": y_test,
-        "rf": rf,
-        "scaler": scaler,
-        "encoder": encoder,
-        "feature_names": full_feature_list
-    }
+    # --- Step 2: Initialize and Train Random Forest Classifier ---
+    # Use the same hyperparameters as your previous model for a fair comparison
+    rf_lda = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=None,
+        min_samples_split=5,
+        min_samples_leaf=3,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        bootstrap=True,
+    )
 
-from collections import defaultdict
-import pandas as pd
+    # Train the Random Forest using ONLY the single LDA component
+    # Reshape the data for fit if needed (though LDA output is usually correct)
+    rf_lda.fit(X_train_lda, y_train)
 
+    # --- Step 3: Evaluate the Baseline Model ---
+    y_pred_lda = rf_lda.predict(X_test_lda)
+
+    print("\n" + "=" * 50)
+    print("       Random Forest on Single LDA Component")
+    print("=" * 50)
+    print(f"LDA Baseline Accuracy: {accuracy_score(y_test, y_pred_lda):.4f}")
+    print("\nClassification Report (LDA Baseline):\n", classification_report(y_test, y_pred_lda))
+
+    #PCA random forest
+    pca = PCA(n_components=len(FEATURES_NUM)-1)
+    X_train_pca = pca.fit_transform(X_train_num_scaled)
+    X_test_pca = pca.transform(X_test_num_scaled)
+    X_train_pca_full = np.hstack([X_train_pca, X_train_cat])
+    X_test_pca_full = np.hstack([X_test_pca, X_test_cat])
+
+    rf_pca = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=None,
+        min_samples_split=5,
+        min_samples_leaf=3,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        bootstrap=True,
+    )
+
+    rf_pca.fit(X_train_pca_full, y_train)
+
+    # --- Step 3: Evaluate the Baseline Model ---
+    y_pred_pca = rf_pca.predict(X_test_pca_full)
+
+    print("\n" + "=" * 50)
+    print("       Random Forest on PCA")
+    print("=" * 50)
+    print(f"PCA Baseline Accuracy: {accuracy_score(y_test, y_pred_pca):.4f}")
+    print("\nClassification Report (PCA Baseline):\n", classification_report(y_test, y_pred_pca))
+
+    # ---------------------------------------
+    # 13. Feature importance
+    # ---------------------------------------
+    pca_feature_names = [f'PC{i + 1}' for i in range(X_train_pca.shape[1])]
+    # The categorical features names are still correct
+    categorical_feature_names = list(cat_feature_names)
+
+    # The new, correct list of 12 features
+    pca_full_feature_list = pca_feature_names + categorical_feature_names
+    importance = rf_pca.feature_importances_
+    fi_df_pca = pd.DataFrame({
+        "Feature": pca_full_feature_list,  # <-- CORRECTED
+        "Importance": importance
+    }).sort_values("Importance", ascending=False)
+
+    print("\nRandom Forest Feature Importances (PCA Components):")
+    print(fi_df_pca)
+
+    # ---------------------------------------
+    # 8. Pearson correlation matrix
+    # ---------------------------------------
+    corr_matrix = pd.DataFrame(X_train_pca, columns=pca_feature_names).corr()
+    plt.figure(figsize=(16, 8))
+    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
+    plt.title("Pearson Correlation — Numerical Features")
+    plt.tight_layout()
+    plt.show()
+    # ---------------------------------------
+
+    # a. Stack all features back together (Training and Testing)
+    # Combine the PCA numerical features and the categorical features
+    X_pca_full = np.vstack([X_train_pca_full, X_test_pca_full])
+
+    # b. Combine all target variables (Training and Testing)
+    y_full = np.concatenate([y_train, y_test])
+
+    # c. Get the list of PCA feature names for the DataFrame
+    pca_feature_names = [f'PC{i + 1}' for i in range(X_train_pca.shape[1])]
+    categorical_feature_names = list(encoder.get_feature_names_out(FEATURES_CAT))
+
+    pca_export_columns = pca_feature_names + categorical_feature_names
+
+    # d. Create the DataFrame
+    df_pca_export = pd.DataFrame(X_pca_full, columns=pca_export_columns)
+
+    # Add target, log target, and other analysis columns
+    df_pca_export[LOG_TARGET] = y_full
+    # ✅ These lines are now CORRECT because 'df' was already subsetted and index reset!
+    df_pca_export["playerA_points_won_pct"] = df["playerA_points_won_pct"]
+    df_pca_export["minutes"] = df["minutes"]
+    df_pca_export["playerA"] = df["playerA_name"]
+    df_pca_export["playerB"] = df["playerB_name"]
+    df_pca_export["pseudo_date"] = df["pseudo_date"]  # Changed to tourney_date for consistency
+    # based on your sorting at the top
+
+    # f. Export to CSV
+    df_pca_export.to_csv("phaseII_pca_reduced.csv", index=False)
+    print("\nExported PCA-reduced dataset (phaseII_pca_reduced.csv) ready for phase II.")
+
+    # ---------------------------------------
 
 if __name__ == '__main__':
     #data_cleaning()
