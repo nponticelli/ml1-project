@@ -1,0 +1,118 @@
+python phase1.py
+Selected feature matrix shape: (90028, 10)
+Finished outlier winsorization.
+Exported dataset ready for phaseII.
+Train/Test Split Complete:
+X_train_raw shape: (72022, 10), X_test_raw shape: (18006, 10)
+
+Final Processed Data Shapes:
+X_train shape: (72022, 11), X_test shape: (18006, 11)
+Total features: 11
+
+SVD singular values: [382.92990426 285.50333772 272.19493891 267.46658442 258.66899029
+ 245.75932605 221.33498653 161.56610066]
+Explained variance ratio by SVD (normalized): [0.25449743 0.14147093 0.12858933 0.12416063 0.1161271  0.104825
+ 0.08502467 0.04530492]
+
+Condition Number (S_max / S_min): 2.37 ⚠️
+Interpretation: A high value (> 30-100) indicates significant multicollinearity/instability.
+
+Variance Inflation Factors (VIF):
+                  Feature       VIF
+0       combined_elo_diff  1.760449
+1            ace_pct_diff  1.081821
+2        fatigue_10d_diff  1.080442
+3       year_fatigue_diff  1.616359
+4          prime_age_diff  1.015710
+5            raw_age_diff  1.015693
+6       prime_height_diff  1.022898
+7  service_advantage_diff  1.258327
+
+Covariance Matrix (Numerical Features Only):
+                        combined_elo_diff  ace_pct_diff  fatigue_10d_diff  year_fatigue_diff  prime_age_diff  raw_age_diff  prime_height_diff  service_advantage_diff
+combined_elo_diff                1.000014      0.170951          0.139152           0.590284       -0.060378      0.088810          -0.011681                0.403413
+ace_pct_diff                     0.170951      1.000014          0.032357           0.079744       -0.006925      0.001793           0.139369                0.214103
+fatigue_10d_diff                 0.139152      0.032357          1.000014           0.238452       -0.034842     -0.004344           0.010145                0.179921
+year_fatigue_diff                0.590284      0.079744          0.238452           1.000014       -0.121576      0.028818           0.010601                0.251060
+prime_age_diff                  -0.060378     -0.006925         -0.034842          -0.121576        1.000014      0.015676           0.003353               -0.019054
+raw_age_diff                     0.088810      0.001793         -0.004344           0.028818        0.015676      1.000014          -0.013379               -0.036759
+prime_height_diff               -0.011681      0.139369          0.010145           0.010601        0.003353     -0.013379           1.000014               -0.007833
+service_advantage_diff           0.403413      0.214103          0.179921           0.251060       -0.019054     -0.036759          -0.007833                1.000014
+
+PCA explained variance ratio: [0.25449743 0.14147093 0.12858933 0.12416063 0.1161271  0.104825
+ 0.08502467 0.04530492]
+LDA explained variance: [1.]
+
+Random Forest Accuracy: 0.649950016661113
+
+Classification Report:
+               precision    recall  f1-score   support
+
+           0       0.65      0.65      0.65      8955
+           1       0.65      0.65      0.65      9051
+
+    accuracy                           0.65     18006
+   macro avg       0.65      0.65      0.65     18006
+weighted avg       0.65      0.65      0.65     18006
+
+
+Random Forest Feature Importances:
+                   Feature  Importance
+0        combined_elo_diff    0.251190
+3        year_fatigue_diff    0.141700
+7   service_advantage_diff    0.128806
+1             ace_pct_diff    0.107656
+4           prime_age_diff    0.096274
+5             raw_age_diff    0.095473
+2         fatigue_10d_diff    0.082300
+6        prime_height_diff    0.075312
+10               best_of_5    0.009424
+9           rusty_diff_1.0    0.006264
+8           rusty_diff_0.0    0.005602
+
+==================================================
+       Random Forest on Single LDA Component
+==================================================
+LDA Baseline Accuracy: 0.6146
+
+Classification Report (LDA Baseline):
+               precision    recall  f1-score   support
+
+           0       0.61      0.62      0.62      8955
+           1       0.62      0.61      0.61      9051
+
+    accuracy                           0.61     18006
+   macro avg       0.61      0.61      0.61     18006
+weighted avg       0.61      0.61      0.61     18006
+
+
+==================================================
+       Random Forest on PCA
+==================================================
+PCA Baseline Accuracy: 0.6461
+
+Classification Report (PCA Baseline):
+               precision    recall  f1-score   support
+
+           0       0.64      0.65      0.65      8955
+           1       0.65      0.64      0.65      9051
+
+    accuracy                           0.65     18006
+   macro avg       0.65      0.65      0.65     18006
+weighted avg       0.65      0.65      0.65     18006
+
+
+Random Forest Feature Importances (PCA Components):
+          Feature  Importance
+0             PC1    0.293010
+5             PC6    0.123580
+4             PC5    0.116791
+3             PC4    0.112263
+6             PC7    0.110605
+1             PC2    0.109877
+2             PC3    0.109422
+8  rusty_diff_1.0    0.009272
+9       best_of_5    0.008985
+7  rusty_diff_0.0    0.006194
+
+Exported PCA-reduced dataset (phaseII_pca_reduced.csv) ready for phase II.

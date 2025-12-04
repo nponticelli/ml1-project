@@ -828,7 +828,16 @@ def feature_engineering():
     U, S, VT = np.linalg.svd(X_train_num_scaled, full_matrices=False)
     print("\nSVD singular values:", S)
     print("Explained variance ratio by SVD (normalized):", S ** 2 / np.sum(S ** 2))
-    
+
+    # 🚨 NEW: Calculate the Condition Number (Ratio of largest to smallest singular value)
+    if len(S) > 1:
+        # S[0] is the largest, S[-1] is the smallest
+        condition_number = S[0] / S[-1]
+        print(f"\nCondition Number (S_max / S_min): {condition_number:.2f} ⚠️")
+        print("Interpretation: A high value (> 30-100) indicates significant multicollinearity/instability.")
+    else:
+        print("\nCondition Number: Not applicable (only one feature).")
+
     # ---------------------------------------
     # 5b. Variance Inflation Factor (VIF)
     # ---------------------------------------
