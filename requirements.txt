@@ -1,29 +1,38 @@
-contourpy @ file:///work/buildout/croot/contourpy_1761938075614/work
-cycler @ file:///tmp/build/80754af9/cycler_1637851556182/work
-fonttools @ file:///work/buildout/croot/fonttools_1759953991351/work
+cloudpickle==3.1.2
+contourpy
+cycler
+fonttools
+imbalanced-learn==0.14.0
 joblib==1.5.2
-kiwisolver @ file:///work/buildout/croot/kiwisolver_1759954115441/work
+kiwisolver
+llvmlite==0.46.0b1
 matplotlib==3.10.6
 mkl-service==2.5.2
-mkl_fft @ file:///home/task_176159258493269/conda-bld/mkl_fft_1761592900924/work
-mkl_random @ file:///home/task_176159293775784/conda-bld/mkl_random_1761592951865/work
-numpy @ file:///home/task_176252779912422/conda-bld/numpy_and_numpy_base_1762528497814/work/dist/numpy-2.3.4-cp314-cp314-linux_x86_64.whl#sha256=e315099324d117702c4704ff5ca2e50ab550328a251addd0a46952eed85fb6a6
-packaging @ file:///home/task_176104874909647/conda-bld/packaging_1761049078203/work
+mkl_fft
+mkl_random
+numba==0.63.0b1
+numpy==2.3.4
+packaging
 pandas==2.3.3
 patsy==1.0.2
-pillow @ file:///work/buildout/croot/pillow_1762546694560/work
-pyparsing @ file:///work/buildout/croot/pyparsing_1762548730019/work
+pillow
+pyparsing
 PyQt6==6.9.1
-PyQt6_sip @ file:///work/buildout/croot/pyqt-split_1759957344790/work/pyqt_sip
-python-dateutil @ file:///work/buildout/croot/python-dateutil_1759952394083/work
+PyQt6_sip
+python-dateutil
 pytz==2025.2
 scikit-learn==1.7.2
 scipy==1.16.3
+seaborn==0.13.2
 setuptools==80.9.0
-sip @ file:///work/buildout/croot/sip_1761939556033/work
-six @ file:///work/buildout/croot/six_1759952127748/work
+shap==0.50.0
+sip
+six
+slicer==0.0.8
 statsmodels==0.14.5
+tabulate
 threadpoolctl==3.6.0
-tornado @ file:///work/buildout/croot/tornado_1759952458497/work
+tornado
+tqdm==4.67.1
+typing_extensions==4.15.0
 tzdata==2025.2
-shap

@@ -10,7 +10,7 @@ def load_and_prepare_data(file_path="phaseII.csv"):
     df = pd.read_csv(file_path)
     FEATURES_NUM = [
         "combined_elo_diff",
-        "last_minutes_diff",
+        "ace_pct_diff",
         "fatigue_10d_diff",
         "year_fatigue_diff",
         "raw_age_diff",
