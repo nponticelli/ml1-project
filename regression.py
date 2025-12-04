@@ -1,70 +1,47 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.metrics import mean_squared_error
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 
-def load_and_prepare_data(file_path="phaseII.csv"):
-    # Load dataset
-    df = pd.read_csv(file_path)
-    FEATURES_NUM = [
-        "combined_elo_diff",
-        "ace_pct_diff",
-        "fatigue_10d_diff",
-        "year_fatigue_diff",
-        "raw_age_diff",
-        "prime_age_diff",
-        "raw_height_diff",
-        "prime_height_diff",
-        "service_advantage_diff",
-    ]
-    FEATURES_CAT = ["rusty_diff", "best_of"]
-    TARGET = "playerA_points_won_pct"
+def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL CHANGE: Load the final PCA file
 
-    X = df[FEATURES_NUM + FEATURES_CAT].copy()
+    df = pd.read_csv(file_path)
+
+    # 7 Numerical PCs + 3 Categorical features = 10 total features (if 7 PC)
+    # If you reduced to 6 PCs, this list should be PC1 to PC6 + the 3 OHE features.
+    # Let's assume 6 PCs for the reduced model:
+    FEATURES_ALL = [
+        "PC1", "PC2", "PC3", "PC4", "PC5", "PC6",
+        "rusty_diff_0.0", "rusty_diff_1.0", "best_of_5"
+    ]
+    TARGET = "playerA_points_won_pct"  # Assuming this is your binary target (0/1)
+
+    # ---------------------------------------
+    # 1. Select features
+    # ---------------------------------------
+    # Features are already scaled and encoded from Phase I pipeline
+    X = df[FEATURES_ALL].copy()
     Y = df[TARGET].copy()
-    # Split the data
+
+    # ---------------------------------------
+    # 2. Split the data
+    # ---------------------------------------
     cutoff = int(len(X) * 0.8)
-    x_train_raw, x_test_raw = X[:cutoff], X[cutoff:]
+    x_train, x_test = X[:cutoff], X[cutoff:]  # Use final names directly
     y_train, y_test = Y[:cutoff], Y[cutoff:]
 
     print("Train/Test Split Complete:")
-    print(f"x_train_raw shape: {x_train_raw.shape}, x_test_raw shape: {x_test_raw.shape}")
+    print(f"x_train shape: {x_train.shape}, x_test shape: {x_test.shape}")
 
-    scaler = StandardScaler()
-
-    # FIT the scaler ONLY on the training data
-    x_train_num_scaled = scaler.fit_transform(x_train_raw[FEATURES_NUM])
-    # TRANSFORM the test data using the TR AINING fit
-    x_test_num_scaled = scaler.transform(x_test_raw[FEATURES_NUM])
-
-    # Encoder
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore", drop='first')
-
-    # FIT the encoder ONLY on the training data
-    x_train_cat = encoder.fit_transform(x_train_raw[FEATURES_CAT])
-    # TRANSFORM the test data using the TRAINING fit
-    x_test_cat = encoder.transform(x_test_raw[FEATURES_CAT])
-
-    # Get feature names for final list
-    cat_feature_names = encoder.get_feature_names_out(FEATURES_CAT)
-
-    # ---------------------------------------
-    # 4. Combine into final feature matrices
-    # ---------------------------------------
-    # Stack the scaled numerical features and the encoded categorical features
-    x_train = np.hstack([x_train_num_scaled, x_train_cat])
-    x_test = np.hstack([x_test_num_scaled, x_test_cat])
-
-    # Create the full list of feature names
-    full_feature_list = FEATURES_NUM + list(cat_feature_names)
+    full_feature_list = FEATURES_ALL
 
     print("\nFinal Processed Data Shapes:")
     print(f"x_train shape: {x_train.shape}, x_test shape: {x_test.shape}")
     print(f"Total features: {len(full_feature_list)}")
 
-    return x_train, x_test, y_train, y_test, full_feature_list
+    return x_train.values, x_test.values, y_train, y_test, full_feature_list
+    # Note: Returning .values for x_train/x_test to match np.hstack output format
 
 
 # --- Helper Function for Stepwise Regression ---
