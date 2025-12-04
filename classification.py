@@ -607,39 +607,34 @@ def run_pre_pruned_tree(x_train, x_test, y_train, y_test, feature_names):
 
 def run_post_prune_tree(x_train, x_test, y_train, y_test, feature_names):
     """
-    Runs Post-Pruned Decision Tree using CCP and generates the Accuracy vs. Alpha plot
-    based on Cross-Validation scores, ensuring computational efficiency via alpha sampling.
+    Runs Post-Pruned Decision Tree using CCP and evaluates ALL alpha values
+    from the pruning path for robust optimization.
     """
 
     # ---------------------------------------
-    # 1. Determine Pruning Path (Alpha values) and Sample
+    # 1. Determine Pruning Path (Alpha values)
     # ---------------------------------------
     unpruned_dt = DecisionTreeClassifier(random_state=42)
     unpruned_dt.fit(x_train, y_train)
 
     prune_path = unpruned_dt.cost_complexity_pruning_path(x_train, y_train)
     ccp_alphas = prune_path.ccp_alphas
-    ccp_alphas = ccp_alphas[:-1]  # Exclude alpha that prunes to the root
-
-    # --- Re-integrated Alpha Sampling for performance safeguard ---
-    if len(ccp_alphas) > 100:
-        print(f"Sampling {len(ccp_alphas)} alphas down to 100 for efficiency...")
-        alpha_indices = np.linspace(0, len(ccp_alphas) - 1, 100).astype(int)
-        sampled_alphas = ccp_alphas[alpha_indices]
-    else:
-        sampled_alphas = ccp_alphas
+    # Use ALL generated alphas, excluding the one that prunes to the root (the last one)
+    alphas_to_evaluate = ccp_alphas[:-1]
 
     # ---------------------------------------
-    # 2. Evaluate Alpha Values using Stratified K-Fold CV
+    # 2. Evaluate Alpha Values using Stratified K-Fold CV (Using ALL alphas)
     # ---------------------------------------
-    print(f"Starting cross-validation to find optimal alpha over {len(sampled_alphas)} samples...")
+    print(f"Starting cross-validation to find optimal alpha over {len(alphas_to_evaluate)} samples...")
     start_time = time.time()
 
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     alpha_mean_scores = []
 
-    for alpha in sampled_alphas:  # <-- Using sampled_alphas
+    # Iterate over the FULL set of generated alphas
+    for alpha in alphas_to_evaluate:
         dt = DecisionTreeClassifier(random_state=42, ccp_alpha=alpha)
+        # We use a dedicated cross_val_score loop as there is no single GridSearch that fits this process
         scores = cross_val_score(dt, x_train, y_train, cv=cv, scoring='accuracy', n_jobs=-1)
         alpha_mean_scores.append(scores.mean())
 
@@ -648,42 +643,39 @@ def run_post_prune_tree(x_train, x_test, y_train, y_test, feature_names):
 
     # Find the alpha that gave the best CV accuracy
     best_alpha_index = np.argmax(alpha_mean_scores)
-    best_alpha = sampled_alphas[best_alpha_index]  # <-- Indexing into sampled_alphas
+    best_alpha = alphas_to_evaluate[best_alpha_index]
 
     # ---------------------------------------
     # 3. Plot Accuracy vs. Alpha Value 📈
     # ---------------------------------------
     plt.figure(figsize=(10, 6))
-    # Note: We plot the mean scores against the sampled_alphas
-    plt.plot(sampled_alphas, alpha_mean_scores, marker='o', drawstyle="steps-post", label='5-Fold CV Accuracy')
+    # Plot the mean scores against the full alphas_to_evaluate set
+    plt.plot(alphas_to_evaluate, alpha_mean_scores, marker='o', drawstyle="steps-post", label='5-Fold CV Accuracy')
     plt.axvline(best_alpha, color='r', linestyle='--', label=f'Optimal Alpha: {best_alpha:.6f}')
     plt.xlabel("Cost Complexity Pruning Alpha Value ($c_p$)")
     plt.ylabel("Mean Cross-Validation Accuracy")
-    plt.title("Post-Pruning: CV Accuracy vs. Alpha Value")
+    plt.title("Post-Pruning: CV Accuracy vs. Alpha Value (Full Path)")
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.6)
 
-    # 🚨 CHANGE: Save the Alpha vs. Accuracy plot
     plt.savefig('post_pruned_dt_alpha_vs_accuracy.png')
-    plt.close()  # Close the figure to free memory
+    plt.close()
 
     print(f"\nOptimal Alpha based on 5-Fold CV: {best_alpha:.6f}")
 
     # ---------------------------------------
     # 4. Final Model Training and Evaluation
     # ---------------------------------------
-
-    # Train the final model using the optimal alpha found via CV
     best_model = DecisionTreeClassifier(random_state=42, ccp_alpha=best_alpha)
     best_model.fit(x_train, y_train)
 
     y_pred = best_model.predict(x_test)
     y_prob = best_model.predict_proba(x_test)[:, 1]
 
-    # ... (rest of metric calculation code) ...
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = cm.ravel()
 
+    # Standard Metrics
     accuracy = accuracy_score(y_test, y_pred)
     precision = precision_score(y_test, y_pred)
     recall = recall_score(y_test, y_pred)
@@ -724,7 +716,6 @@ def run_post_prune_tree(x_train, x_test, y_train, y_test, feature_names):
 
     plt.tight_layout()
     plt.savefig('post_pruned_dt_cm_roc_visuals.png')
-    # plt.show() # Removed
 
     # ---------------------------------------
     # 6. Return Data for Comparison Table
@@ -923,13 +914,15 @@ def run_svm(x_train, x_test, y_train, y_test, feature_names):
     print("Starting SVM Grid Search...")
     start_time = time.time()
 
-    grid_search = GridSearchCV(
+    grid_search = RandomizedSearchCV(
         estimator=svm_clf,
-        param_grid=param_grid,
+        param_distributions=param_grid,  # Use param_grid as the distribution
+        n_iter=50,  # Test 50 combinations
         scoring='accuracy',
         cv=cv,
         n_jobs=-1,
-        verbose=1
+        verbose=1,
+        random_state=42
     )
 
     grid_search.fit(x_train, y_train)
@@ -1460,6 +1453,9 @@ if __name__ == '__main__':
     # Load and preprocess
     xTrain, xTest, yTrain, yTest, feature_names = load_and_prepare_data()
 
+    post_prune_tree_results = run_post_prune_tree(xTrain, xTest, yTrain, yTest, feature_names)
+    print("Post-pruned Tree Results: ", post_prune_tree_results)
+
     lda_results = run_lda(xTrain, xTest, yTrain, yTest, feature_names)
     print("LDA Results: ", lda_results)
 
@@ -1472,8 +1468,7 @@ if __name__ == '__main__':
     pre_pruned_tree_results = run_pre_pruned_tree(xTrain, xTest, yTrain, yTest, feature_names)
     print("Pre-pruned Tree Results: ", pre_pruned_tree_results)
 
-    post_prune_tree_results = run_post_prune_tree(xTrain, xTest, yTrain, yTest, feature_names)
-    print("Post-pruned Tree Results: ", post_prune_tree_results)
+
 
     knn_results = run_knn(xTrain, xTest, yTrain, yTest, feature_names)
     print("KNN Results: ", knn_results)
