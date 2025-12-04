@@ -43,7 +43,6 @@ def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL 
     return x_train.values, x_test.values, y_train, y_test, full_feature_list
     # Note: Returning .values for x_train/x_test to match np.hstack output format
 
-
 # --- Helper Function for Stepwise Regression ---
 def stepwise_regression(X_train, y_train, feature_names, verbose=False):
     """Performs backward stepwise selection based on Adjusted R-squared."""
@@ -90,7 +89,6 @@ def stepwise_regression(X_train, y_train, feature_names, verbose=False):
 
     # Return the final set of features and the model before the final step failed to improve
     return selected_features, best_model
-
 
 def run_regression(x_train, x_test, y_train, y_test, feature_names):
     # ---------------------------------------
