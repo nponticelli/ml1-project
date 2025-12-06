@@ -199,7 +199,7 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
              alpha=0.5)
 
     plt.title("Actual vs. Predicted Percentage of Points Won (Test Set)")
-    plt.xlabel("Data Point Index (Chronological)")
+    plt.xlabel("Data Point Index")
     plt.ylabel("Player A Points Won Percentage")
     plt.legend()
     plt.grid(True, alpha=0.3)
