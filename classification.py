@@ -1243,9 +1243,9 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
     print(f"Best Parameters: {random_search.best_params_}")
     print(f"Best CV Score (Accuracy): {random_search.best_score_:.4f}")
 
-    # ---------------------------------------
-    # 3. Final Predictions and Metrics
-    # ---------------------------------------
+
+    # 3. Final Predictions and Metrics, hope its good
+
     y_pred = best_model.predict(x_test)
     y_prob = best_model.predict_proba(x_test)[:, 1]
 
@@ -1255,7 +1255,7 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
     # Standard Metrics
     accuracy = accuracy_score(y_test, y_pred)
     precision = precision_score(y_test, y_pred)
-    recall = recall_score(y_test, y_pred)  # Sensitivity
+    recall = recall_score(y_test, y_pred)  # Sensitivity, interchangeable I think
     f1 = f1_score(y_test, y_pred)
 
     # Specificity Calculation: TN / (TN + FP)
@@ -1275,9 +1275,7 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
     print(f"AUC:         {roc_auc:.4f}")
     print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
-    # ---------------------------------------
-    # 4. Create visuals
-    # ---------------------------------------
+    # 4. Create visuals, must be good for report, needed
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -1320,17 +1318,13 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
 def plot_all_roc_curves(models_and_names, X_test, y_test):
     plt.figure(figsize=(10, 8))
 
-    # Plot the baseline random curve
+    # Plot the baseline random curve, this is just a straight line for a random guess !
     plt.plot([0, 1], [0, 1], 'k--', label='Random (AUC = 0.50)')
 
     for name, model in models_and_names.items():
         # Get prediction probabklities for the positive class (Class 1)
-        try:
-            # Check if the model has predict_proba (most classifiers do)
-            y_prob = model.predict_proba(X_test)[:, 1]
-        except AttributeError:
-            # Fallback for models like some LDA solvers
-            y_prob = model.decision_function(X_test)
+
+        y_prob = model.predict_proba(X_test)[:, 1]
 
         # Calculate ROC curve metrics
         fpr, tpr, _ = roc_curve(y_test, y_prob)
@@ -1339,7 +1333,7 @@ def plot_all_roc_curves(models_and_names, X_test, y_test):
         # Plot the curve
         plt.plot(fpr, tpr, lw=2, label=f'{name} (AUC = {roc_auc:.4f})')
 
-    # Final plot styling and saving
+    # Final plot
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate (1 - Specificity)')

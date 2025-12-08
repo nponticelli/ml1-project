@@ -42,8 +42,6 @@ def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):
 
 # --- Helper Function for Stepwise Regression ---
 def stepwise_regression(X_train, y_train, feature_names, verbose=False):
-    """Performs backward stepwise selection based on Adjusted R-squared."""
-
     selected_features = feature_names[:]
     best_score = -np.inf
     best_model = None
@@ -88,9 +86,6 @@ def stepwise_regression(X_train, y_train, feature_names, verbose=False):
     return selected_features, best_model
 
 def run_regression(x_train, x_test, y_train, y_test, feature_names):
-    # ---------------------------------------
-    # 1. Full Model Training (using statsmodels)
-    # ---------------------------------------
     # Statsmodels requires an explicit constant (intercept) term
     X_train_sm = sm.add_constant(x_train)
     X_test_sm = sm.add_constant(x_test)
@@ -106,7 +101,7 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
     # ---------------------------------------
     # 2. Stepwise Regression (Backward)
     # ---------------------------------------
-    # Perform backward elimination based on R²
+    # Perform backward elimination  on R²
     selected_features_indices = [i for i, f in enumerate(feature_names)]
 
     # Use the helper function (note: it uses all features initially)
@@ -114,11 +109,11 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
         x_train, y_train, feature_names, verbose=True
     )
 
-    # Get the X_test for the stepwise model
+    # Get the X_test for stepwise model
     X_test_stepwise = x_test[:, [feature_names.index(f) for f in final_features_stepwise]]
     X_test_stepwise_sm = sm.add_constant(X_test_stepwise)
 
-    # Prediction using the stepwise model
+    # Prediction using stepwise model
     y_pred_stepwise = best_model_stepwise.predict(X_test_stepwise_sm)
 
     print("\n" + "=" * 50)
@@ -126,12 +121,12 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
     print("=" * 50)
     print(best_model_stepwise.summary())
 
-    # Use the stepwise model as the final recommended model
+    # Use the stepwise model as the recommended model, project descrption says this
     final_model = best_model_stepwise
     y_pred = y_pred_stepwise
 
     # ---------------------------------------
-    # 3. Required Metrics Table (Using Stepwise Model)
+    # 3. R(Using Stepwise Model)
     # ---------------------------------------
     aic = final_model.aic
     bic = final_model.bic
@@ -166,19 +161,9 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
     ci_table.columns = ['Lower CI (2.5%)', 'Upper CI (97.5%)']
     print(ci_table.to_markdown())
 
-    # ---------------------------------------
-    # 5. T-test and F-test Analysis
-    # ---------------------------------------
-    # T-test: Provided in the model summary (P>|t| column).
-    # F-test: Provided in the model summary (Prob(F-statistic)).
-    print(
-        "\n*T-test Analysis:* Refer to the 'P>|t|' column in the summary table. A P-value < 0.05 indicates the coefficient is statistically significant.")
-    print(
-        "\n*F-test Analysis:* Refer to the 'Prob (F-statistic)' in the summary table. A P-value < 0.05 indicates the overall model is statistically significant.")
 
     # ---------------------------------------
-    # 6. Plotting Results
-    # ---------------------------------------
+    # 6. Plotting Results, need visuals for rpeort
 
     n_plot = 500
 

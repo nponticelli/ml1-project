@@ -8,10 +8,9 @@ from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_har
 import warnings
 warnings.filterwarnings("ignore") # Suppress warnings related to K-Means convergence
 
-def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL CHANGE: Load the final PCA file
+def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):
 
     df = pd.read_csv(file_path)
-
 
     FEATURES_ALL = [
         "PC1", "PC2", "PC3", "PC4", "PC5", "PC6",
@@ -43,14 +42,11 @@ def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL 
     print(f"Total features: {len(full_feature_list)}")
 
     return x_train.values, x_test.values, y_train, y_test, full_feature_list
-    # Note: Returning .values for x_train/x_test to match np.hstack output format
 
 
 def run_clustering(x_train, x_test, y_train, y_test, feature_names):
-    """
-    Performs K-Means clustering analysis for K=2 to 15, including all requested metrics, and savess the plots.
-    """
 
+    #Clustering method, so far analysis isn't good for clusters
     # --- Configuration ---
     max_k = 50
     K_range = range(2, max_k + 1)
@@ -79,7 +75,7 @@ def run_clustering(x_train, x_test, y_train, y_test, feature_names):
     print(f"\n--- Running K-Means and Metrics Analysis (K=2 to {max_k}) ---")
 
     for k in K_range:
-        # 1. Apply K-Means (Fit always on full training data)
+        # 1. Apply K-Means (Fit always on just trrtaining data)
         kmeans = KMeans(n_clusters=k, init='k-means++', random_state=42, n_init=10)
         kmeans.fit(x_train)
 
@@ -109,9 +105,7 @@ def run_clustering(x_train, x_test, y_train, y_test, feature_names):
         print(
             f"K={k}: Inertia={kmeans.inertia_:.2f}, Silhouette={silhouette_avg:.4f}, DBI={db_index:.4f}, CHI={ch_index:.2f}, MIS={mi_score:.4f}, ARS={ar_score:.4f}")
 
-    # ----------------------------------------------------
-    # Plotting 1: Within-Cluster Variation (Elbow Method)
-    # ----------------------------------------------------
+    #elbow method!
     plt.figure(figsize=(10, 5))
     plt.plot(K_range, inertia_values, marker='o', linestyle='--', color='blue')
     plt.title('Within-Cluster Variation (Inertia) - Elbow Method', fontsize=16)
@@ -123,7 +117,7 @@ def run_clustering(x_train, x_test, y_train, y_test, feature_names):
     plt.close()
 
     # ----------------------------------------------------
-    # Plotting 2: Silhouette Analysis (Average Score)
+    # Silhouette Analysis (\\ Score)
     # ----------------------------------------------------
     plt.figure(figsize=(10, 5))
     plt.plot(K_range, silhouette_scores, marker='o', linestyle='-', color='red')
@@ -136,7 +130,7 @@ def run_clustering(x_train, x_test, y_train, y_test, feature_names):
     plt.close()
 
     # ----------------------------------------------------
-    # Plotting 3: All Metrics Analysis (Combined)
+    # Plotting all metricss
     # ----------------------------------------------------
     fig, axes = plt.subplots(5, 1, figsize=(10, 25), sharex=True)
 
@@ -173,7 +167,7 @@ def run_clustering(x_train, x_test, y_train, y_test, feature_names):
     plt.savefig('k_means_all_metrics_plots.png')
     plt.close()
 
-    # --- Summary Output ---
+    # --- Summmary Output ---
     summary_df = pd.DataFrame({
         'K': K_range,
         'Inertia': inertia_values,
