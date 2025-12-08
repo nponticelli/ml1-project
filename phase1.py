@@ -848,11 +848,25 @@ def feature_engineering():
     print(vif_data)
 
     # ---------------------------------------
-    # 7. Covariance matrix (numerical only)
+    # 7. Covariance matrix (UNSTANDARDIZED numerical features)
     # ---------------------------------------
-    cov_matrix = np.cov(X_train_num_scaled, rowvar=False)
-    print("\nCovariance Matrix (Numerical Features Only):")
+    # Use X_train_raw[FEATURES_NUM] because this is before scaling
+    cov_matrix = np.cov(X_train_raw[FEATURES_NUM].to_numpy(), rowvar=False)
+
+    print("\nRaw Covariance Matrix (Numerical Features Only):")
     print(pd.DataFrame(cov_matrix, index=FEATURES_NUM, columns=FEATURES_NUM))
+
+    plt.figure(figsize=(16, 8))
+    sns.heatmap(
+        pd.DataFrame(cov_matrix, index=FEATURES_NUM, columns=FEATURES_NUM),
+        annot=True,
+        fmt=".2f",
+        cmap="coolwarm",
+    )
+    plt.title("Covariance Matrix Heatmap")
+    plt.tight_layout()
+    plt.savefig("covariance_heatmap.png", dpi=300)
+    plt.show()
 
     # ---------------------------------------
     # 8. Pearson correlation matrix

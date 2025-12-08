@@ -12,14 +12,12 @@ def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL 
 
     df = pd.read_csv(file_path)
 
-    # 7 Numerical PCs + 3 Categorical features = 10 total features (if 7 PC)
-    # If you reduced to 6 PCs, this list should be PC1 to PC6 + the 3 OHE features.
-    # Let's assume 6 PCs for the reduced model:
+
     FEATURES_ALL = [
         "PC1", "PC2", "PC3", "PC4", "PC5", "PC6",
         "rusty_diff_0.0", "rusty_diff_1.0", "best_of_5"
     ]
-    TARGET = "log_target"  # Assuming this is your binary target (0/1)
+    TARGET = "log_target"
 
     # ---------------------------------------
     # 1. Select features
@@ -50,11 +48,11 @@ def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL 
 
 def run_clustering(x_train, x_test, y_train, y_test, feature_names):
     """
-    Performs K-Means clustering analysis for K=2 to 15, including all requested metrics, and saves the plots.
+    Performs K-Means clustering analysis for K=2 to 15, including all requested metrics, and savess the plots.
     """
 
     # --- Configuration ---
-    max_k = 25
+    max_k = 50
     K_range = range(2, max_k + 1)
     SAMPLE_SIZE = 10000
 

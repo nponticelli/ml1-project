@@ -4,18 +4,15 @@ from sklearn.metrics import mean_squared_error
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 
-def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL CHANGE: Load the final PCA file
+def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):
 
     df = pd.read_csv(file_path)
 
-    # 7 Numerical PCs + 3 Categorical features = 10 total features (if 7 PC)
-    # If you reduced to 6 PCs, this list should be PC1 to PC6 + the 3 OHE features.
-    # Let's assume 6 PCs for the reduced model:
     FEATURES_ALL = [
         "PC1", "PC2", "PC3", "PC4", "PC5", "PC6",
         "rusty_diff_0.0", "rusty_diff_1.0", "best_of_5"
     ]
-    TARGET = "playerA_points_won_pct"  # Assuming this is your binary target (0/1)
+    TARGET = "playerA_points_won_pct"
 
     # ---------------------------------------
     # 1. Select features
@@ -41,7 +38,7 @@ def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):  # <-- CRITICAL 
     print(f"Total features: {len(full_feature_list)}")
 
     return x_train.values, x_test.values, y_train, y_test, full_feature_list
-    # Note: Returning .values for x_train/x_test to match np.hstack output format
+
 
 # --- Helper Function for Stepwise Regression ---
 def stepwise_regression(X_train, y_train, feature_names, verbose=False):
@@ -70,7 +67,7 @@ def stepwise_regression(X_train, y_train, feature_names, verbose=False):
             scores[feature_to_remove] = model.rsquared_adj
             models[feature_to_remove] = model
 
-        # Find the feature whose removal yields the highest Adjusted R²
+        # Find the feature whose removl yields the highest Adjusted R²
         best_removal = max(scores, key=scores.get)
         current_best_score = scores[best_removal]
 
@@ -87,7 +84,7 @@ def stepwise_regression(X_train, y_train, feature_names, verbose=False):
                 print(f"Stopping. Max Adj. R² was achieved with current features.")
             break
 
-    # Return the final set of features and the model before the final step failed to improve
+    # Return the final set of features and the model before the fnal step failed to improve
     return selected_features, best_model
 
 def run_regression(x_train, x_test, y_train, y_test, feature_names):
@@ -109,7 +106,7 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
     # ---------------------------------------
     # 2. Stepwise Regression (Backward)
     # ---------------------------------------
-    # Perform backward elimination based on Adj. R²
+    # Perform backward elimination based on R²
     selected_features_indices = [i for i, f in enumerate(feature_names)]
 
     # Use the helper function (note: it uses all features initially)
@@ -159,7 +156,7 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
     print(metrics_df.to_markdown(index=False))
 
     # ---------------------------------------
-    # 4. Confidence Interval Analysis
+    # 4. Confidence Interval Analsis
     # ---------------------------------------
     print("\n" + "=" * 50)
     print("      95% CONFIDENCE INTERVALS (Stepwise Model)")
@@ -182,7 +179,7 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
     # ---------------------------------------
     # 6. Plotting Results
     # ---------------------------------------
-    # Limit the number of test points for a readable plot
+
     n_plot = 500
 
     plt.figure(figsize=(10, 6))
@@ -190,11 +187,11 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
     plt.plot(range(n_plot), y_test[:n_plot], label='Actual Test Value (y_test)', color='blue', marker='.',
              linestyle='None')
 
-    # Fix 2: REMOVE .values from y_pred (it is a NumPy array from the predict() method)
+
     plt.plot(range(n_plot), y_pred[:n_plot], label='Predicted Value (y_pred)', color='red', marker='x',
              linestyle='None')
 
-    # Fix 3: Remove .values from y_train (it is a Pandas Series, but can be treated like a numpy array)
+
     plt.plot(range(n_plot, n_plot + n_plot), y_train[-n_plot:], label='Training Data (y_train)', color='gray',
              alpha=0.5)
 
@@ -204,12 +201,6 @@ def run_regression(x_train, x_test, y_train, y_test, feature_names):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.show()
-
-
-# You would integrate this function into your main execution block:
-# if __name__ == '__main__':
-#     xTrain, xTest, yTrain, yTest, feature_names = load_and_prepare_data()
-#     run_regression(xTrain, xTest, yTrain, yTest, feature_names)
 
 if __name__ == '__main__':
     # Load and preprocess
