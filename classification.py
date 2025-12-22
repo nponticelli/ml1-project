@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
+from xgboost import XGBClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score, RandomizedSearchCV, StratifiedKFold
 from sklearn.metrics import (
@@ -25,13 +26,24 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 
-def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):
+def load_and_prepare_data(file_path="phaseII_non_pca_classification.csv"):
 
     df = pd.read_csv(file_path)
 
     FEATURES_ALL = [
-        "PC1", "PC2", "PC3", "PC4", "PC5", "PC6",
-        "rusty_diff_0.0", "rusty_diff_1.0", "best_of_5"
+        "surface_elo_diff",
+        "global_elo_diff",
+        "ace_pct_diff",
+        "fatigue_10d_diff",
+        "year_fatigue_diff",
+        "prime_age_diff",
+        "raw_age_diff",
+        "prime_height_diff",
+        "service_advantage_diff",
+        "tourney_history_diff",
+        "dominance_ratio_diff",
+        "raw_age_diff_sq",
+        "age_fatigue_diff",
     ]
     TARGET = "log_target"
 
@@ -815,7 +827,6 @@ def run_knn(x_train, x_test, y_train, y_test, feature_names):
         "Best Model": best_model
     }
 
-
 def run_svm(x_train, x_test, y_train, y_test, feature_names):
 
     # ---------------------------------------
@@ -938,7 +949,6 @@ def run_svm(x_train, x_test, y_train, y_test, feature_names):
 
         "Best Model": best_model
     }
-
 
 def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
 
@@ -1315,6 +1325,130 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
 
         "Best Model": best_model
     }
+
+
+def run_xgboost(x_train, x_test, y_train, y_test, feature_names):
+    """
+    XGBoost Implementation following the exact format of your RF and MLP functions.
+    Optimized for high-variance sports data with specific regularization.
+    """
+
+    # Define filenames for saving plots
+    classifier_name = "XGBoost"
+    output_filename = f"{classifier_name}_Visuals.png"
+
+    # ---------------------------------------
+    # 1. Setup Stratified K-Fold & Hyperparams
+    # ---------------------------------------
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    # eval_metric='logloss' avoids warnings in newer XGB versions
+    xgb_clf = XGBClassifier(random_state=42, eval_metric='logloss')
+
+    # Hyperparameter Grid:
+    # 'learning_rate': Smaller values (0.01-0.05) help hit the 71% ceiling by being precise.
+    # 'gamma': Regularization parameter that prevents overfitting in tennis data.
+    # 'subsample': Training on 80% of data randomly per tree adds robustness.
+    param_grid = {
+        'n_estimators': [200, 300, 500],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_depth': [3, 5, 7, 10],
+        'min_child_weight': [1, 3, 5],
+        'gamma': [0, 0.1, 0.2, 0.4],
+        'subsample': [0.7, 0.8, 0.9],
+        'colsample_bytree': [0.7, 0.8, 0.9]
+    }
+
+    # ---------------------------------------
+    # 2. Perform Randomized Search
+    # ---------------------------------------
+    print("Starting XGBoost Randomized Search...")
+    start_time = time.time()
+
+    random_search = RandomizedSearchCV(
+        estimator=xgb_clf,
+        param_distributions=param_grid,
+        n_iter=50,
+        scoring='accuracy',
+        cv=cv,
+        n_jobs=-1,
+        verbose=1,
+        random_state=42
+    )
+
+    random_search.fit(x_train, y_train)
+    end_time = time.time()
+
+    best_model = random_search.best_estimator_
+
+    print(f"\nXGBoost Randomized Search finished in {end_time - start_time:.2f} seconds. ⏱️")
+    print(f"Best Parameters: {random_search.best_params_}")
+    print(f"Best CV Score (Accuracy): {random_search.best_score_:.4f}")
+
+    # ---------------------------------------
+    # 3. Final Predictions and Metrics
+    # ---------------------------------------
+    y_pred = best_model.predict(x_test)
+    y_prob = best_model.predict_proba(x_test)[:, 1]
+
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+
+    fpr, tpr, thresholds = roc_curve(y_test, y_prob)
+    roc_auc = auc(fpr, tpr)
+
+    print(f"\n--- {classifier_name} Performance Metrics (Optimized) ---")
+    print(f"Test Set Accuracy: {accuracy:.4f}")
+    print(f"Precision:   {precision:.4f}")
+    print(f"Sensitivity: {recall:.4f} (Recall)")
+    print(f"Specificity: {specificity:.4f}")
+    print(f"F-Score:     {f1:.4f}")
+    print(f"AUC:         {roc_auc:.4f}")
+    print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+    # ---------------------------------------
+    # 4. Visualizations
+    # ---------------------------------------
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Confusion Matrix
+    cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=best_model.classes_)
+    cm_display.plot(ax=axes[0], cmap='magma')
+    axes[0].set_title(f"{classifier_name} Confusion Matrix")
+
+    # Plot 2: ROC Curve
+    axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
+    axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    axes[1].set_xlabel('False Positive Rate')
+    axes[1].set_ylabel('True Positive Rate')
+    axes[1].set_title('ROC Curve')
+    axes[1].legend(loc="lower right")
+
+    plt.tight_layout()
+    plt.savefig(output_filename)
+    print(f"Saved Confusion Matrix and ROC Curve to: {output_filename}")
+
+    # ---------------------------------------
+    # 5. Return Results
+    # ---------------------------------------
+    return {
+        "Classifier": "XGBoost (Boosting)",
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall (Sensitivity)": recall,
+        "Specificity": specificity,
+        "F-Score": f1,
+        "AUC": roc_auc,
+        "Best Params": random_search.best_params_,
+        "Best Model": best_model
+    }
+
 def plot_all_roc_curves(models_and_names, X_test, y_test):
     plt.figure(figsize=(10, 8))
 
@@ -1353,11 +1487,11 @@ if __name__ == '__main__':
     #post_prune_tree_results = run_post_prune_tree(xTrain, xTest, yTrain, yTest, feature_names)
     #print("Post-pruned Tree Results: ", post_prune_tree_results)
 
-    lda_results = run_lda(xTrain, xTest, yTrain, yTest, feature_names)
-    print("LDA Results: ", lda_results)
+    #lda_results = run_lda(xTrain, xTest, yTrain, yTest, feature_names)
+    #print("LDA Results: ", lda_results)
 
-    log_reg_results = run_logistic_regression(xTrain, xTest, yTrain, yTest, feature_names)
-    print("Logistic Regression Results: ", log_reg_results)
+    #log_reg_results = run_logistic_regression(xTrain, xTest, yTrain, yTest, feature_names)
+    #print("Logistic Regression Results: ", log_reg_results)
 
     #decision_tree_results = run_decision_tree(xTrain, xTest, yTrain, yTest, feature_names)
     #print("Decision Tree Results: ", decision_tree_results)
@@ -1365,36 +1499,35 @@ if __name__ == '__main__':
     #pre_pruned_tree_results = run_pre_pruned_tree(xTrain, xTest, yTrain, yTest, feature_names)
     #print("Pre-pruned Tree Results: ", pre_pruned_tree_results)
 
-
+    xgboost_results = run_xgboost(xTrain, xTest, yTrain, yTest, feature_names)
 
     #knn_results = run_knn(xTrain, xTest, yTrain, yTest, feature_names)
     #print("KNN Results: ", knn_results)
 
-    #random_forest_results = run_random_forest(xTrain, xTest, yTrain, yTest, feature_names)
+    random_forest_results = run_random_forest(xTrain, xTest, yTrain, yTest, feature_names)
     #print("Random Forest Results: ", random_forest_results)
 
     #svm_results = run_svm(xTrain, xTest, yTrain, yTest, feature_names)
     #print("SVM Results: ", svm_results)
 
     naive_bayes_results = run_naive_bayes(xTrain, xTest, yTrain, yTest, feature_names)
-    print("Naive Bayes Results: ", naive_bayes_results)
+    #print("Naive Bayes Results: ", naive_bayes_results)
 
-    #neural_net_results = run_mlp_neural_network(xTrain, xTest, yTrain, yTest, feature_names)
+    neural_net_results = run_mlp_neural_network(xTrain, xTest, yTrain, yTest, feature_names)
     #print("MLP Neural Network Results: ", neural_net_results)
 
     models_to_plot = {
-        "LDA": lda_results["Best Model"],
-        "Logistic Regression": log_reg_results["Best Model"],
+        #"LDA": lda_results["Best Model"],
+        #"Logistic Regression": log_reg_results["Best Model"],
         #"Decision Tree": decision_tree_results["Best Model"],
         #"Pre-pruned Tree": pre_pruned_tree_results["Best Model"],
         #"Post-pruned Tree": post_prune_tree_results["Best Model"],
         #"KNN": knn_results["Best Model"],
-        #"Random Forest": random_forest_results["Best Model"],
+        "Random Forest": random_forest_results["Best Model"],
         #"SVM": svm_results["Best Model"],
         "Naive Bayes": naive_bayes_results["Best Model"],
-        #"MLP Neural Network": neural_net_results["Best Model"],
-
-
+        "MLP Neural Network": neural_net_results["Best Model"],
+        "XGBoost": xgboost_results["Best Model"],
     }
 
     plot_all_roc_curves(models_to_plot, xTest, yTest)

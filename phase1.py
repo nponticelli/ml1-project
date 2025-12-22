@@ -1,22 +1,17 @@
-import random
-
 import pandas as pd
 import numpy as np
 import re
-from collections import defaultdict
-from scipy.stats._mstats_basic import winsorize
-from sklearn.inspection import permutation_importance
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from sklearn.ensemble import RandomForestClassifier, IsolationForest
-from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
 from collections import defaultdict
 import matplotlib.pyplot as plt
-from numpy.linalg import svd
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import seaborn as sns
-from sklearn.utils.class_weight import compute_class_weight
+from datetime import timedelta
+from thefuzz import process, fuzz
 
 def load_raw_data():
     df = pd.read_csv("atp_matches.csv")
@@ -100,6 +95,66 @@ def clean_basic_fields(df):
             )
 
     return df
+
+def add_bets(df):
+
+    df_bet = pd.read_csv("betting_odds.csv")
+
+    def normalize_betting_names(name):
+        """Converts 'Clement A.' to 'A Clement' for better fuzzy matching"""
+        if pd.isna(name): return name
+        parts = name.split(' ')
+        if len(parts) >= 2:
+            # Taking 'Clement A.' -> 'A Clement'
+            return f"{parts[1].replace('.', '')} {parts[0]}"
+        return name
+
+    # 1. Standardize Dates
+    # Standard: 20010101 (int) -> datetime
+    df['match_date'] = pd.to_datetime(df['tourney_date'].astype(str), format='%Y%m%d')
+
+    # Betting: 1/1/2001 (str) -> datetime
+    df_bet['match_date'] = pd.to_datetime(df_bet['Date'], dayfirst=True)
+
+    # 2. Basic Name Normalization on Betting Data
+    df_bet['W_norm'] = df_bet['Winner'].apply(normalize_betting_names)
+    df_bet['L_norm'] = df_bet['Loser'].apply(normalize_betting_names)
+
+    def build_name_map(std_names, bet_names):
+        name_map = {}
+        unique_bet_names = list(set(bet_names))
+        unique_std_names = list(set(std_names))
+
+        for b_name in unique_bet_names:
+            # Using token_sort_ratio handles "Lleyton Hewitt" vs "Hewitt Lleyton"
+            match, score = process.extractOne(b_name, unique_std_names, scorer=fuzz.token_sort_ratio)
+            if score > 80:
+                name_map[b_name] = match
+        return name_map
+
+    # Run mapping
+    std_players = pd.concat([df['winner_name'], df['loser_name']]).unique()
+    bet_players = pd.concat([df_bet['W_norm'], df_bet['L_norm']]).unique()
+    mapper = build_name_map(std_players, bet_players)
+
+    # Apply mapping back to betting df
+    df_bet['winner_std_name'] = df_bet['W_norm'].map(mapper)
+    df_bet['loser_std_name'] = df_bet['L_norm'].map(mapper)
+
+    # Sort for merge_asof
+    df = df.sort_values('match_date')
+    df_bet = df_bet.sort_values('match_date')
+
+    # Merge Winner Odds
+    merged = pd.merge(
+        df,
+        df_bet[['match_date', 'winner_std_name', 'loser_std_name', 'B365W', 'B365L']],
+        left_on=['match_date', 'winner_name', 'loser_name'],
+        right_on=['match_date', 'winner_std_name', 'loser_std_name'],
+        how='left'
+    )
+
+    return merged
 
 def clean_score_fields(df):
 
@@ -405,10 +460,20 @@ def compute_age_features(df):
 
     df["playerA_prime_age"] = abs(df["playerA_age"] - mean_age)
     df["playerB_prime_age"] = abs(df["playerB_age"] - mean_age)
-
     df["prime_age_diff"] = df["playerA_prime_age"] - df["playerB_prime_age"]
 
+    #Linear difference
     df["raw_age_diff"] = df["playerA_age"] - df["playerB_age"]
+
+    # 3. NON-LINEAR FEATURES (The "71% Push")
+    # Squared difference: Penalizes large age gaps (e.g., Veteran vs. Young Gun)
+    df["raw_age_diff_sq"] = np.sign(df["raw_age_diff"]) * (df["raw_age_diff"] ** 2)
+
+    # 4. Age Interaction with Fatigue
+    # Older players (Age > 32) are more impacted by 10-day fatigue
+    df["pA_age_fatigue"] = df["playerA_age"] * df["fatigue_10d_diff"]
+    df["pB_age_fatigue"] = df["playerB_age"] * df["fatigue_10d_diff"]
+    df["age_fatigue_diff"] = df["pA_age_fatigue"] - df["pB_age_fatigue"]
 
     return df
 
@@ -429,141 +494,35 @@ def compute_height_features(df):
 
     return df
 
-def compute_grand_slam_champion(df):
-    """
-    Adds features indicating if a player has won a Grand Slam up to that point.
-    Assumes df is sorted by pseudo_date.
-    Winner of GS final is determined by log_target: 1=playerA wins, 0=playerB wins.
-    """
-    df['playerA_grand_slam'] = 0
-    df['playerB_grand_slam'] = 0
-
-    gs_winners = defaultdict(bool)  # player_id -> has won GS yet?
-
-    for idx, row in df.iterrows():
-        pA = row['playerA_id']
-        pB = row['playerB_id']
-
-        # Mark if they've won GS before this match
-        df.at[idx, 'playerA_grand_slam'] = int(gs_winners[pA])
-        df.at[idx, 'playerB_grand_slam'] = int(gs_winners[pB])
-
-        # Update GS winner if this match is a Grand Slam final
-        if row['round'] == 'F' and row['tourney_level'] == 'G':
-            if row['log_target'] == 1:
-                gs_winners[pA] = True
-            elif row['log_target'] == 0:
-                gs_winners[pB] = True
-
-    # Optional: difference column
-    df['grand_slam_diff'] = df['playerA_grand_slam'] - df['playerB_grand_slam']
-
-    return df
-
-def compute_service_stats(df, window=5):
-    service_hist = defaultdict(list)
-    return_hist = defaultdict(list)
-    first_serve_hist = defaultdict(list)
-
-    playerA_adv = []
-    playerB_adv = []
-    playerA_first_pct = []
-    playerB_first_pct = []
-
-    # Ensure chronological order
-    df = df.sort_values('pseudo_date').reset_index(drop=True)
-
-    def weighted_pct(hist, player_id):
-        """Weighted rolling percentage with linear weights."""
-        last_matches = hist[player_id][-window:]
-        if not last_matches:
-            return 0.5
-        total_won = 0
-        total_pts = 0
-        for i, (won, pts) in enumerate(reversed(last_matches), 1):
-            weight = i
-            total_won += won * weight
-            total_pts += pts * weight
-        return total_won / total_pts if total_pts > 0 else 0.5
-
-    def weighted_first_serve_pct(hist, player_id):
-        """Weighted rolling first serve %."""
-        last_matches = hist[player_id][-window:]
-        if not last_matches:
-            return 0.65  # neutral default first serve %
-        total_first_in = 0
-        total_svpt = 0
-        for i, (first_in, svpt) in enumerate(reversed(last_matches), 1):
-            weight = i
-            total_first_in += first_in * weight
-            total_svpt += svpt * weight
-        return total_first_in / total_svpt if total_svpt > 0 else 0.65
-
-    for idx, row in df.iterrows():
-        playerA, playerB = row['playerA_id'], row['playerB_id']
-
-        # Service points
-        playerA_service_won = row['playerA_1stWon'] + row['playerA_2ndWon']
-        playerA_service_total = row['playerA_svpt']
-        playerB_service_won = row['playerB_1stWon'] + row['playerB_2ndWon']
-        playerB_service_total = row['playerB_svpt']
-
-        # Return points
-        playerA_return_won = playerB_service_total - playerB_service_won
-        playerB_return_won = playerA_service_total - playerA_service_won
-
-        # First serve
-        playerA_first_in = row['playerA_1stIn']
-        playerB_first_in = row['playerB_1stIn']
-
-        # Compute advantages
-        playerA_advantage = weighted_pct(service_hist, playerA) - weighted_pct(return_hist, playerB)
-        playerB_advantage = weighted_pct(service_hist, playerB) - weighted_pct(return_hist, playerA)
-
-        playerA_adv.append(playerA_advantage)
-        playerB_adv.append(playerB_advantage)
-
-        playerA_first_pct.append(weighted_first_serve_pct(first_serve_hist, playerA))
-        playerB_first_pct.append(weighted_first_serve_pct(first_serve_hist, playerB))
-
-        # Update histories after current match
-        service_hist[playerA].append((playerA_service_won, playerA_service_total))
-        service_hist[playerB].append((playerB_service_won, playerB_service_total))
-
-        return_hist[playerA].append((playerA_return_won, playerB_service_total))
-        return_hist[playerB].append((playerB_return_won, playerA_service_total))
-
-        first_serve_hist[playerA].append((playerA_first_in, playerA_service_total))
-        first_serve_hist[playerB].append((playerB_first_in, playerB_service_total))
-
-    df['playerA_service_advantage'] = playerA_adv
-    df['playerB_service_advantage'] = playerB_adv
-    df['service_advantage_diff'] = df['playerA_service_advantage'] - df['playerB_service_advantage']
-    df['playerA_first_serve_pct'] = playerA_first_pct
-    df['playerB_first_serve_pct'] = playerB_first_pct
-    df['first_serve_pct_diff'] = df['playerA_first_serve_pct'] - df['playerB_first_serve_pct']
-
-    return df
-
 def compute_rolling_h2h(df, window=10, alpha=1):
+    # Ensure chronological order
     df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
-    h2h_dict = defaultdict(list)  # {(min_id, max_id): [1,0,1,...] last outcomes}
+
+    # Key: (min_id, max_id, surface) -> Value: [list of outcomes]
+    h2h_dict = defaultdict(list)
 
     playerA_h2h = []
     playerB_h2h = []
 
     for idx, row in df.iterrows():
         a_id, b_id = row["playerA_id"], row["playerB_id"]
-        p_min, p_max = sorted([a_id, b_id])
-        key = (p_min, p_max)
+        surface = row["surface"]
 
-        # Get last `window` results from min_id perspective
+        # Consistent key regardless of who is A or B
+        p_min, p_max = sorted([a_id, b_id])
+        key = (p_min, p_max, surface)
+
+        # 1. GET HISTORY (Looking only at the current surface)
         history = h2h_dict[key][-window:]
         wins_min = sum(history)
         total = len(history)
+
+        # 2. LAPLACE SMOOTHING
+        # This is vital for surface-H2H because the sample size (total)
+        # will be much smaller than global H2H.
         smoothed_win_pct = (wins_min + alpha) / (total + 2 * alpha)
 
-        # Assign win % relative to each player
+        # 3. ASSIGN WIN %
         if a_id == p_min:
             playerA_h2h.append(smoothed_win_pct)
             playerB_h2h.append(1 - smoothed_win_pct)
@@ -571,18 +530,22 @@ def compute_rolling_h2h(df, window=10, alpha=1):
             playerA_h2h.append(1 - smoothed_win_pct)
             playerB_h2h.append(smoothed_win_pct)
 
-        # Record outcome from min_id perspective (1 if min_id won)
-        winner_is_min = (row["log_target"] == 1 and a_id == p_min) or (row["log_target"] == 0 and b_id == p_min)
+        # 4. UPDATE HISTORY
+        # Determine if the winner was the 'min_id' player
+        # (Assuming log_target == 1 means Player A won)
+        winner_is_min = (row["log_target"] == 1 and a_id == p_min) or \
+                        (row["log_target"] == 0 and b_id == p_min)
+
         h2h_dict[key].append(1 if winner_is_min else 0)
 
-    df["playerA_h2h_win_pct"] = playerA_h2h
-    df["playerB_h2h_win_pct"] = playerB_h2h
-    df["h2h_diff"] = df["playerA_h2h_win_pct"] - df["playerB_h2h_win_pct"]
+    # Add features to dataframe
+    df["playerA_surface_h2h_pct"] = playerA_h2h
+    df["playerB_surface_h2h_pct"] = playerB_h2h
+    df["surface_h2h_diff"] = df["playerA_surface_h2h_pct"] - df["playerB_surface_h2h_pct"]
 
     return df
 
-
-def compute_service_stats_v2(df, window=5):
+def compute_service_stats(df, window=10):
     # 1. Initialize Histories
     service_hist = defaultdict(list)
     return_hist = defaultdict(list)
@@ -708,6 +671,170 @@ def compute_service_stats_v2(df, window=5):
 
     return df
 
+def compute_tournament_history(df, alpha=2):
+    """
+    Tracks how well a player has performed at a specific tournament in the past.
+    Uses Laplace smoothing to handle players with no/little history.
+    """
+    # 1. Sort chronologically to prevent leakage
+    df = df.sort_values(['pseudo_date', 'match_num']).reset_index(drop=True)
+
+    # 2. Key: (player_id, tourney_name) -> [wins, total_matches]
+    tourney_hist = defaultdict(lambda: [0, 0])
+
+    playerA_tourney_win_pct = []
+    playerB_tourney_win_pct = []
+
+    # 3. Iterate through the matches
+    for row in df.itertuples():
+        pA = row.playerA_id
+        pB = row.playerB_id
+        t_name = row.tourney_name
+
+        # --- PRE-MATCH CALCULATION ---
+        # Get history for Player A
+        a_wins, a_total = tourney_hist[(pA, t_name)]
+        # Laplace Smoothing: (wins + alpha) / (total + 2*alpha)
+        # alpha=2 ensures 1-0 records aren't treated as 100% win rates
+        a_pct = (a_wins + alpha) / (a_total + 2 * alpha)
+
+        # Get history for Player B
+        b_wins, b_total = tourney_hist[(pB, t_name)]
+        b_pct = (b_wins + alpha) / (b_total + 2 * alpha)
+
+        playerA_tourney_win_pct.append(a_pct)
+        playerB_tourney_win_pct.append(b_pct)
+
+        # --- POST-MATCH UPDATE ---
+        # Check who won (assuming log_target=1 means Player A won)
+        if row.log_target == 1:
+            tourney_hist[(pA, t_name)][0] += 1  # A wins
+        else:
+            tourney_hist[(pB, t_name)][0] += 1  # B wins
+
+        tourney_hist[(pA, t_name)][1] += 1  # A total
+        tourney_hist[(pB, t_name)][1] += 1  # B total
+
+    # 4. Assign new features
+    df['playerA_tourney_history'] = playerA_tourney_win_pct
+    df['playerB_tourney_history'] = playerB_tourney_win_pct
+    df['tourney_history_diff'] = df['playerA_tourney_history'] - df['playerB_tourney_history']
+
+    return df
+
+def compute_elo_velocity(df):
+    """
+    Calculates the change in Elo over the last 3 months and 1 year.
+    'Velocity' identifies players on a steep upward or downward trajectory.
+    """
+    # Ensure chronological order
+    df = df.sort_values(['pseudo_date', 'match_num']).reset_index(drop=True)
+
+    # Store history as {player_id: [(date, elo), (date, elo), ...]}
+    elo_history = {}
+
+    velocity_features = {
+        'pA_elo_3m_delta': [], 'pB_elo_3m_delta': [],
+        'pA_elo_1y_delta': [], 'pB_elo_1y_delta': []
+    }
+
+    for row in df.itertuples():
+        current_date = row.pseudo_date
+
+        for prefix in ['pA', 'pB']:
+            p_id = getattr(row, f'playerA_id' if prefix == 'pA' else 'playerB_id')
+            current_elo = getattr(row, f'playerA_global_elo' if prefix == 'pA' else 'playerB_global_elo')
+
+            # Initialize history if new player
+            if p_id not in elo_history:
+                elo_history[p_id] = []
+
+            # Look back logic
+            history = elo_history[p_id]
+
+            for period_name, days in [('3m', 90), ('1y', 365)]:
+                target_date = current_date - timedelta(days=days)
+
+                # Find the elo closest to the target date (but not after it)
+                past_elo = None
+                for hist_date, hist_elo in reversed(history):
+                    if hist_date <= target_date:
+                        past_elo = hist_elo
+                        break
+
+                # Calculate delta (Current - Past). If no history, delta is 0.
+                delta = current_elo - past_elo if past_elo is not None else 0
+                velocity_features[f'{prefix}_elo_{period_name}_delta'].append(delta)
+
+            # Update history AFTER calculation (to prevent leakage)
+            elo_history[p_id].append((current_date, current_elo))
+
+    # Add to dataframe
+    for feat_name, values in velocity_features.items():
+        df[feat_name] = values
+
+    # Create difference features for the model
+    df['elo_velocity_3m_diff'] = df['pA_elo_3m_delta'] - df['pB_elo_3m_delta']
+    df['elo_velocity_1y_diff'] = df['pA_elo_1y_delta'] - df['pB_elo_1y_delta']
+
+    return df
+
+def compute_dominance_ratio(df, window=15):
+    """
+    Calculates the rolling Dominance Ratio.
+    A DR > 1.0 means the player wins a higher percentage of return points
+    than they lose on their own serve.
+    """
+    # 1. Ensure chronological order
+    df = df.sort_values(['pseudo_date', 'match_num']).reset_index(drop=True)
+
+    # 2. Track historical match efficiency {player_id: [(ret_won_pct, srv_lost_pct)]}
+    player_stats = {}
+
+    pA_dr_rolling = []
+    pB_dr_rolling = []
+
+    for row in df.itertuples():
+        pA_id, pB_id = row.playerA_id, row.playerB_id
+
+        # --- PRE-MATCH CALCULATION (Using past history) ---
+        for p_id, target_list in [(pA_id, pA_dr_rolling), (pB_id, pB_dr_rolling)]:
+            if p_id in player_stats and len(player_stats[p_id]) > 0:
+                recent = player_stats[p_id][-window:]
+                avg_ret_won = np.mean([x[0] for x in recent])
+                avg_srv_lost = np.mean([x[1] for x in recent])
+
+                # DR = (Return Pts Won %) / (Serve Pts Lost %)
+                # Use max(..., 0.01) to avoid division by zero
+                dr = avg_ret_won / max(avg_srv_lost, 0.01)
+                target_list.append(dr)
+            else:
+                target_list.append(1.0)  # Neutral baseline
+
+        # --- POST-MATCH UPDATE (Adding this match to player history) ---
+        # Calculate stats for Player A in THIS match
+        pA_srv_pts = row.playerA_svpt
+        pA_srv_won = row.playerA_1stWon + row.playerA_2ndWon
+        pA_srv_lost_pct = (pA_srv_pts - pA_srv_won) / max(pA_srv_pts, 1)
+
+        pB_srv_pts = row.playerB_svpt
+        pB_srv_won = row.playerB_1stWon + row.playerB_2ndWon
+        pA_ret_won_pct = (pB_srv_pts - pB_srv_won) / max(pB_srv_pts, 1)
+
+        # Calculate stats for Player B in THIS match
+        pB_srv_lost_pct = (pB_srv_pts - pB_srv_won) / max(pB_srv_pts, 1)
+        pB_ret_won_pct = (pA_srv_pts - pA_srv_won) / max(pA_srv_pts, 1)
+
+        # Append to history
+        player_stats.setdefault(pA_id, []).append((pA_ret_won_pct, pA_srv_lost_pct))
+        player_stats.setdefault(pB_id, []).append((pB_ret_won_pct, pB_srv_lost_pct))
+
+    df['playerA_DR'] = pA_dr_rolling
+    df['playerB_DR'] = pB_dr_rolling
+    df['dominance_ratio_diff'] = df['playerA_DR'] - df['playerB_DR']
+
+    return df
+
 def data_cleaning():
 
     df = load_raw_data()
@@ -720,7 +847,11 @@ def data_cleaning():
     df = compute_fatigue(df)
     df = compute_age_features(df)
     df  = compute_height_features(df)
-    df = compute_service_stats_v2(df)
+    df = compute_service_stats(df)
+    df = compute_rolling_h2h(df)
+    df = compute_tournament_history(df)
+    df = compute_elo_velocity(df)
+    df = compute_dominance_ratio(df)
     df.to_csv("data_cleaned_shuffled.csv", index=False)
 
     return df
@@ -737,7 +868,8 @@ def feature_engineering():
     # 2. Select features
     # ---------------------------------------
     FEATURES_NUM = [
-        "combined_elo_diff",
+        "surface_elo_diff",
+        "global_elo_diff",
         "ace_pct_diff",
         "fatigue_10d_diff",
         "year_fatigue_diff",
@@ -745,8 +877,12 @@ def feature_engineering():
         "raw_age_diff",
         "prime_height_diff",
         "service_advantage_diff",
+        "tourney_history_diff",
+        "dominance_ratio_diff",
+        "raw_age_diff_sq",
+        "age_fatigue_diff",
     ]
-    FEATURES_CAT = ["rusty_diff", "best_of"]
+    FEATURES_CAT = []
     LOG_TARGET = "log_target"
     LIN_TARGET = df["playerA_points_won_pct"]
     LIN_TARGET2 = df["minutes"]
@@ -759,7 +895,16 @@ def feature_engineering():
     # ---------------------------------------
     # 3. Handle Outliers (IQR Winsorization)
     # ---------------------------------------
-    IQR_cap = FEATURES_NUM
+    IQR_cap = ["surface_elo_diff",
+        "global_elo_diff",
+        "fatigue_10d_diff",
+        "year_fatigue_diff",
+        "prime_age_diff",
+        "raw_age_diff",
+        "prime_height_diff",
+               "raw_age_diff_sq",
+               "age_fatigue_diff",
+                       ]
     for col in IQR_cap:
         Q1, Q3 = X[col].quantile([0.25, 0.75])
         IQR = Q3 - Q1
@@ -794,7 +939,6 @@ def feature_engineering():
     X_train_num_scaled = scaler.fit_transform(X_train_raw[FEATURES_NUM])
     # TRANSFORM the test data using the TR AINING fit
     X_test_num_scaled = scaler.transform(X_test_raw[FEATURES_NUM])
-
 
     #Encoder
     encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore", drop='first')
@@ -905,7 +1049,7 @@ def feature_engineering():
 
     plt.axhline(y=target_variance, color='r', linestyle='--', label=f'{target_variance*100:.0f}% Variance')
     plt.axvline(x=n_components_target, color='r', linestyle='--')
-    plt.text(n_components_target + 0.5, target_variance - 0.05, 
+    plt.text(n_components_target + 0.5, target_variance - 0.05,
             f'{n_components_target} Components', color='r', fontsize=12)
 
     plt.title('Cumulative Explained Variance Plot', fontsize=16)
@@ -966,32 +1110,6 @@ def feature_engineering():
 
     print("\nRandom Forest Feature Importances:")
     print(fi_df)
-
-    # --- Step 2: Initialize and Train Random Forest Classifier ---
-    # Use the same hyperparameters as your previous model for a fair comparison
-    rf_lda = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=None,
-        min_samples_split=5,
-        min_samples_leaf=3,
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1,
-        bootstrap=True,
-    )
-
-    # Train the Random Forest using ONLY the single LDA component
-    # Reshape the data for fit if needed (though LDA output is usually correct)
-    rf_lda.fit(X_train_lda, y_train)
-
-    # --- Step 3: Evaluate the Baseline Model ---
-    y_pred_lda = rf_lda.predict(X_test_lda)
-
-    print("\n" + "=" * 50)
-    print("       Random Forest on Single LDA Component")
-    print("=" * 50)
-    print(f"LDA Baseline Accuracy: {accuracy_score(y_test, y_pred_lda):.4f}")
-    print("\nClassification Report (LDA Baseline):\n", classification_report(y_test, y_pred_lda))
 
     #PCA random forest
     pca = PCA(n_components=len(FEATURES_NUM)-1)
@@ -1069,7 +1187,7 @@ def feature_engineering():
 
     # Add target, log target, and other analysis columns
     df_pca_export[LOG_TARGET] = y_full
-    # ✅ These lines are now CORRECT because 'df' was already subsetted and index reset!
+    # These lines are now CORRECT because 'df' was already subsetted and index reset!
     df_pca_export["playerA_points_won_pct"] = df["playerA_points_won_pct"]
     df_pca_export["minutes"] = df["minutes"]
     df_pca_export["playerA"] = df["playerA_name"]
@@ -1079,10 +1197,27 @@ def feature_engineering():
 
     # f. Export to CSV
     df_pca_export.to_csv("phaseII_pca_reduced.csv", index=False)
+
     print("\nExported PCA-reduced dataset (phaseII_pca_reduced.csv) ready for phase II.")
 
-    # ---------------------------------------
+    X_full = np.vstack([X_train, X_test])
+    y_full = np.concatenate([y_train, y_test])
+
+    df_non_pca_export = pd.DataFrame(
+        X_full,
+        columns=full_feature_list
+    )
+
+    df_non_pca_export[LOG_TARGET] = y_full
+    df_non_pca_export["playerA_points_won_pct"] = df["playerA_points_won_pct"]
+    df_non_pca_export["minutes"] = df["minutes"]
+    df_non_pca_export["playerA"] = df["playerA_name"]
+    df_non_pca_export["playerB"] = df["playerB_name"]
+    df_non_pca_export["pseudo_date"] = df["pseudo_date"]
+
+    df_non_pca_export.to_csv("phaseII_non_pca_classification.csv", index=False)
+    print("✅ Exported NON-PCA classification dataset.")
 
 if __name__ == '__main__':
-    #data_cleaning()
+    data_cleaning()
     feature_engineering()
