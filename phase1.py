@@ -160,7 +160,7 @@ def add_bets(df):
         if potential_matches:
             match, score = process.extractOne(b_name, potential_matches, scorer=fuzz.token_set_ratio)
 
-            if score >= 70:
+            if score >= 67:
                 name_map[b_name] = match
             else:
                 # Included the count in the print statement
