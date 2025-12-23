@@ -96,7 +96,6 @@ def clean_basic_fields(df):
 
     return df
 
-
 def add_bets(df):
     df_bet = pd.read_csv("betting_odds.csv")
 
@@ -196,7 +195,134 @@ def add_bets(df):
         subset=['tourney_id', 'winner_name', 'loser_name'], keep='first'
     )
 
+    # 1. Calculate Implied Probs (No rounding yet for better precision)
+    merged['raw_prob_w'] = 1 / merged['B365W']
+    merged['raw_prob_l'] = 1 / merged['B365L']
+
+    # 2. Overround (Vig)
+    merged['total_book'] = merged['raw_prob_w'] + merged['raw_prob_l']
+    merged['bookie_margin'] = merged['total_book'] - 1
+
+    # 3. Normalized "True" Probabilities
+    merged['prob_winner_market'] = merged['raw_prob_w'] / merged['total_book']
+    merged['prob_loser_market'] = merged['raw_prob_l'] / merged['total_book']
+
+    # 4. Binary Feature: Did the Favorite Win?
+    # (In tennis, the favorite has the LOWER odds, so the HIGHER implied prob)
+    merged['winner_was_favorite'] = (merged['B365W'] < merged['B365L']).astype(int)
+
+    # 5. Final Rounding (Only at the very end)
+    cols_to_round = ['prob_winner_market', 'prob_loser_market', 'bookie_margin']
+    merged[cols_to_round] = merged[cols_to_round].round(4)
+
     return merged
+
+def create_rank_order_features(df, seed = 42):
+    def reorder(row):
+
+        rng = np.random.RandomState(seed + row.name)
+        val = rng.choice([True, False])
+        new_row = {
+            "tourney_id": row["tourney_id"],
+            "tourney_name": row["tourney_name"],
+            "tourney_date": row["tourney_date"],
+            "tourney_level": row["tourney_level"],
+            "best_of": row["best_of"],
+            "round": row["round"],
+            "surface": row["surface"],
+            "match_num": row["match_num"],
+            "minutes": row["minutes"],
+            "clean_score": row["clean_score"],
+            "bookie_margin": row.get("bookie_margin", np.nan),
+            "bet_match_date": row["bet_match_date"],
+        }
+        if val:
+            new_row.update({
+                "playerA_id": row["winner_id"],
+                "playerA_rank": row["winner_rank"],
+                "playerA_name": row["winner_name"],
+                "playerA_age": row["winner_age"],
+                "playerA_height": row["winner_ht"],
+                "playerA_ace": row["w_ace"],
+                "playerA_df": row["w_df"],
+                "playerA_svpt": row["w_svpt"],
+                "playerA_1stIn": row["w_1stIn"],
+                "playerA_1stWon": row["w_1stWon"],
+                "playerA_2ndWon": row["w_2ndWon"],
+                "playerA_SvGms": row["w_SvGms"],
+                "playerA_bpSaved": row["w_bpSaved"],
+                "playerA_bpFaced": row["w_bpFaced"],
+                "playerA_odds": row.get("B365W", np.nan),
+                "playerA_market_prob": row.get("prob_winner_market", np.nan),
+
+                "playerB_id": row["loser_id"],
+                "playerB_rank": row["loser_rank"],
+                "playerB_name": row["loser_name"],
+                "playerB_age": row["loser_age"],
+                "playerB_height": row["loser_ht"],
+                "playerB_ace": row["l_ace"],
+                "playerB_df": row["l_df"],
+                "playerB_svpt": row["l_svpt"],
+                "playerB_1stIn": row["l_1stIn"],
+                "playerB_1stWon": row["l_1stWon"],
+                "playerB_2ndWon": row["l_2ndWon"],
+                "playerB_SvGms": row["l_SvGms"],
+                "playerB_bpSaved": row["l_bpSaved"],
+                "playerB_bpFaced": row["l_bpFaced"],
+                "playerB_odds": row.get("B365L", np.nan),
+                "playerB_market_prob": row.get("prob_loser_market", np.nan),
+                "log_target": 1,
+                "game_diff": row.get("game_diff", 0)
+            })
+
+        else:
+            new_row.update({
+                "playerA_id": row["loser_id"],
+                "playerA_rank": row["loser_rank"],
+                "playerA_name": row["loser_name"],
+                "playerA_age": row["loser_age"],
+                "playerA_height": row["loser_ht"],
+                "playerA_ace": row["l_ace"],
+                "playerA_df": row["l_df"],
+                "playerA_svpt": row["l_svpt"],
+                "playerA_1stIn": row["l_1stIn"],
+                "playerA_1stWon": row["l_1stWon"],
+                "playerA_2ndWon": row["l_2ndWon"],
+                "playerA_SvGms": row["l_SvGms"],
+                "playerA_bpSaved": row["l_bpSaved"],
+                "playerA_bpFaced": row["l_bpFaced"],
+                "playerA_odds": row.get("B365L", np.nan),
+                "playerA_market_prob": row.get("prob_loser_market", np.nan),
+
+                "playerB_id": row["winner_id"],
+                "playerB_rank": row["winner_rank"],
+                "playerB_name": row["winner_name"],
+                "playerB_age": row["winner_age"],
+                "playerB_height": row["winner_ht"],
+                "playerB_ace": row["w_ace"],
+                "playerB_df": row["w_df"],
+                "playerB_svpt": row["w_svpt"],
+                "playerB_1stIn": row["w_1stIn"],
+                "playerB_1stWon": row["w_1stWon"],
+                "playerB_2ndWon": row["w_2ndWon"],
+                "playerB_SvGms": row["w_SvGms"],
+                "playerB_bpSaved": row["w_bpSaved"],
+                "playerB_bpFaced": row["w_bpFaced"],
+                "playerB_odds": row.get("B365W", np.nan),
+                "playerB_market_prob": row.get("prob_winner_market", np.nan),
+                "log_target": 0,
+                "game_diff": -row.get("game_diff", 0)
+
+            })
+
+        new_row['playerA_points_won'] = new_row['playerA_1stWon'] + new_row['playerA_2ndWon'] + (new_row['playerB_svpt'] - new_row['playerB_1stWon'] - new_row['playerB_2ndWon'])
+        new_row['total_points'] = (new_row['playerA_svpt'] + new_row['playerB_svpt'])
+        new_row['playerA_points_won_pct'] = round(new_row['playerA_points_won'] / new_row['total_points'],4)
+        new_row['playerB_points_won_pct'] = 1 - new_row['playerA_points_won_pct']
+
+        return pd.Series(new_row)
+    df_new = df.apply(reorder, axis=1).reset_index(drop=True)
+    return df_new
 
 def clean_score_fields(df):
 
@@ -289,126 +415,48 @@ def compute_elo_features(df):
 
     return df
 
-def create_rank_order_features(df, seed = 42):
-    def reorder(row):
+def compute_dates(df):
+    # 1. Initialize with the ground truth (Anchor)
+    df['pseudo_date'] = pd.to_datetime(df['bet_match_date'])
 
-        rng = np.random.RandomState(seed + row.name)
-        val = rng.choice([True, False])
-        new_row = {
-            "tourney_id": row["tourney_id"],
-            "tourney_name": row["tourney_name"],
-            "tourney_date": row["tourney_date"],
-            "tourney_level": row["tourney_level"],
-            "best_of": row["best_of"],
-            "round": row["round"],
-            "surface": row["surface"],
-            "match_num": row["match_num"],
-            "minutes": row["minutes"],
-            "clean_score": row["clean_score"],
-        }
-        if val:
-            new_row.update({
-                "playerA_id": row["winner_id"],
-                "playerA_rank": row["winner_rank"],
-                "playerA_name": row["winner_name"],
-                "playerA_age": row["winner_age"],
-                "playerA_height": row["winner_ht"],
-                "playerA_ace": row["w_ace"],
-                "playerA_df": row["w_df"],
-                "playerA_svpt": row["w_svpt"],
-                "playerA_1stIn": row["w_1stIn"],
-                "playerA_1stWon": row["w_1stWon"],
-                "playerA_2ndWon": row["w_2ndWon"],
-                "playerA_SvGms": row["w_SvGms"],
-                "playerA_bpSaved": row["w_bpSaved"],
-                "playerA_bpFaced": row["w_bpFaced"],
-                "playerB_id": row["loser_id"],
-                "playerB_rank": row["loser_rank"],
-                "playerB_name": row["loser_name"],
-                "playerB_age": row["loser_age"],
-                "playerB_height": row["loser_ht"],
-                "playerB_ace": row["l_ace"],
-                "playerB_df": row["l_df"],
-                "playerB_svpt": row["l_svpt"],
-                "playerB_1stIn": row["l_1stIn"],
-                "playerB_1stWon": row["l_1stWon"],
-                "playerB_2ndWon": row["l_2ndWon"],
-                "playerB_SvGms": row["l_SvGms"],
-                "playerB_bpSaved": row["l_bpSaved"],
-                "playerB_bpFaced": row["l_bpFaced"],
-            })
+    # 2. Fill missing with Round Median (Contextual Backup)
+    # This clusters missing rows with their actual peers
+    df['pseudo_date'] = df['pseudo_date'].fillna(
+        df.groupby(['tourney_id', 'round'])['pseudo_date'].transform('median')
+    )
 
-        else:
-            new_row.update({
-                "playerA_id": row["loser_id"],
-                "playerA_rank": row["loser_rank"],
-                "playerA_name": row["loser_name"],
-                "playerA_age": row["loser_age"],
-                "playerA_height": row["loser_ht"],
-                "playerA_ace": row["l_ace"],
-                "playerA_df": row["l_df"],
-                "playerA_svpt": row["l_svpt"],
-                "playerA_1stIn": row["l_1stIn"],
-                "playerA_1stWon": row["l_1stWon"],
-                "playerA_2ndWon": row["l_2ndWon"],
-                "playerA_SvGms": row["l_SvGms"],
-                "playerA_bpSaved": row["l_bpSaved"],
-                "playerA_bpFaced": row["l_bpFaced"],
-                "playerB_id": row["winner_id"],
-                "playerB_rank": row["winner_rank"],
-                "playerB_name": row["winner_name"],
-                "playerB_age": row["winner_age"],
-                "playerB_height": row["winner_ht"],
-                "playerB_ace": row["w_ace"],
-                "playerB_df": row["w_df"],
-                "playerB_svpt": row["w_svpt"],
-                "playerB_1stIn": row["w_1stIn"],
-                "playerB_1stWon": row["w_1stWon"],
-                "playerB_2ndWon": row["w_2ndWon"],
-                "playerB_SvGms": row["w_SvGms"],
-                "playerB_bpSaved": row["w_bpSaved"],
-                "playerB_bpFaced": row["w_bpFaced"],
-            })
+    # 3. Final Fallback: "Last-Played" Rest-Day Logic
+    df = df.sort_values(['tourney_date', 'match_num']).reset_index(drop=True)
+    player_latest = {}
 
-        new_row['playerA_points_won'] = new_row['playerA_1stWon'] + new_row['playerA_2ndWon'] + (new_row['playerB_svpt'] - new_row['playerB_1stWon'] - new_row['playerB_2ndWon'])
-        new_row['total_points'] = (new_row['playerA_svpt'] + new_row['playerB_svpt'])
-        new_row['playerA_points_won_pct'] = round(new_row['playerA_points_won'] / new_row['total_points'],4)
-        new_row['playerB_points_won_pct'] = 1 - new_row['playerA_points_won_pct']
+    for idx, row in df.iterrows():
+        tid, pA, pB = row['tourney_id'], row['playerA_id'], row['playerB_id']
 
-        if row['winner_id'] == new_row['playerA_id']:
-            new_row['log_target'] = 1
-            new_row['game_diff'] = row['game_diff']
-        else:
-            new_row['log_target'] = 0
-            new_row['game_diff'] = -row['game_diff']
-        return pd.Series(new_row)
-    df_new = df.apply(reorder, axis=1).reset_index(drop=True)
-    return df_new
+        if pd.isna(row['pseudo_date']):
+            # Use best_of logic (2 days for 5-setters, 1 for 3-setters)
+            inc = 2 if row['best_of'] == 5 else 1
 
-def compute_pseudo_dates(df):
-    grand_slams = {"Wimbledon", "Roland Garros", "Australian Open", "US Open"}
+            # Look at the most recent actual date these players competed in this tourney
+            date_A = player_latest.get((tid, pA))
+            date_B = player_latest.get((tid, pB))
 
-    df['pseudo_date'] = df['tourney_date']
-    tourney_dict = defaultdict(lambda: defaultdict(int))
+            if date_A or date_B:
+                # Use the latest of the two previous match dates as the baseline
+                base = max(filter(None, [date_A, date_B]))
+                new_date = base + pd.Timedelta(days=inc)
+            else:
+                # First round fallback: use the official tourney start date
+                new_date = row['tourney_date']
 
-    for idx, row in df.sort_values(['tourney_date', 'match_num']).iterrows():
+            df.at[idx, 'pseudo_date'] = new_date
 
-        tid = row['tourney_id']
-        playerA, playerB = row['playerA_id'], row['playerB_id']
+        # CRITICAL: Always update the tracker so the NEXT round knows when these players played
+        player_latest[(tid, pA)] = df.at[idx, 'pseudo_date']
+        player_latest[(tid, pB)] = df.at[idx, 'pseudo_date']
 
-        is_gs = str(row['tourney_name']) in grand_slams
-        inc = 2 if is_gs else 1
-
-        c_w = tourney_dict[tid].get(playerA, 0)
-        c_l = tourney_dict[tid].get(playerB, 0)
-        prior = max(c_w, c_l)
-
-        df.at[idx, 'pseudo_date'] = row['tourney_date'] + pd.Timedelta(days=inc * prior)
-
-        tourney_dict[tid][playerA] = prior + 1
-        tourney_dict[tid][playerB] = prior + 1
-
-    df = df.sort_values('pseudo_date').reset_index(drop=True)
+    # 4. Final Chronological Sort
+    df['pseudo_date'] = pd.to_datetime(df['pseudo_date'])
+    df = df.sort_values(['pseudo_date', 'match_num']).reset_index(drop=True)
     return df
 
 def compute_fatigue(df):
@@ -884,20 +932,18 @@ def data_cleaning():
     df = clean_score_fields(df)
     df = add_bets(df)
     df.to_csv("post_bets.csv", index=False)
-    #
-    # df = create_rank_order_features(df)
-    # df = df.sort_values(["tourney_date", "match_num"])
-    # df = compute_elo_features(df)
-    # df = compute_pseudo_dates(df)
-    # df = compute_fatigue(df)
-    # df = compute_age_features(df)
-    # df  = compute_height_features(df)
-    # df = compute_service_stats(df)
-    # df = compute_rolling_h2h(df)
-    # df = compute_tournament_history(df)
-    # df = compute_elo_velocity(df)
-    # df = compute_dominance_ratio(df)
-    # df.to_csv("data_cleaned_shuffled.csv", index=False)
+    df = create_rank_order_features(df)
+    df = compute_dates(df)
+    df = compute_elo_features(df)
+    df = compute_fatigue(df)
+    df = compute_age_features(df)
+    df  = compute_height_features(df)
+    df = compute_service_stats(df)
+    df = compute_rolling_h2h(df)
+    df = compute_tournament_history(df)
+    df = compute_elo_velocity(df)
+    df = compute_dominance_ratio(df)
+    df.to_csv("data_cleaned_shuffled.csv", index=False)
 
     return df
 
