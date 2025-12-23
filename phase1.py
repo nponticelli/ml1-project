@@ -96,62 +96,104 @@ def clean_basic_fields(df):
 
     return df
 
-def add_bets(df):
 
+def add_bets(df):
     df_bet = pd.read_csv("betting_odds.csv")
 
+    # 1. Clean and Filter
+    df = df[df['tourney_date'].dt.year >= 2003].copy()
+    # This tells pandas: "Try to guess each date individually, but usually assume Month/Day/Year"
+    df_bet['bet_match_date'] = pd.to_datetime(df_bet['Date'], format='mixed', dayfirst=False)
+    df_bet = df_bet[df_bet['bet_match_date'].dt.year >= 2003].copy()
+
+    # 2. Aggressive Name Cleaning (Strip whitespace!)
+    df['winner_name'] = df['winner_name'].str.strip()
+    df['loser_name'] = df['loser_name'].str.strip()
+
     def normalize_betting_names(name):
-        """Converts 'Clement A.' to 'A Clement' for better fuzzy matching"""
+        """
+        Robustly handles multi-part names (De Minaur A.) and multiple initials (Tsonga J.W.).
+        Converts 'De Minaur A.' -> 'A De Minaur'
+        Converts 'Struff J.L.' -> 'J Struff'
+        """
         if pd.isna(name): return name
-        parts = name.split(' ')
+
+        # Clean string and split by spaces
+        parts = str(name).strip().split(' ')
+
         if len(parts) >= 2:
-            # Taking 'Clement A.' -> 'A Clement'
-            return f"{parts[1].replace('.', '')} {parts[0]}"
-        return name
+            # 1. The last part is ALWAYS the initial(s) in this dataset (e.g., 'A.' or 'J.W.')
+            initials_part = parts[-1].replace('.', '')
+            # We only need the very first initial for our strict-initial fuzzy filter
+            first_init = initials_part[0] if len(initials_part) > 0 else ""
 
-    # 1. Standardize Dates
-    # Standard: 20010101 (int) -> datetime
-    df['match_date'] = pd.to_datetime(df['tourney_date'].astype(str), format='%Y%m%d')
+            # 2. Everything before the last part is the Last Name (e.g., ['De', 'Minaur'])
+            last_name_parts = parts[:-1]
+            last_name = " ".join(last_name_parts).replace('.', '')
 
-    # Betting: 1/1/2001 (str) -> datetime
-    df_bet['match_date'] = pd.to_datetime(df_bet['Date'], dayfirst=True)
+            return f"{first_init} {last_name}".strip()
 
-    # 2. Basic Name Normalization on Betting Data
+        return str(name).strip()
+
     df_bet['W_norm'] = df_bet['Winner'].apply(normalize_betting_names)
     df_bet['L_norm'] = df_bet['Loser'].apply(normalize_betting_names)
 
-    def build_name_map(std_names, bet_names):
-        name_map = {}
-        unique_bet_names = list(set(bet_names))
-        unique_std_names = list(set(std_names))
+    # --- Pre-calculate frequency of names in the betting dataset ---
+    # This combines normalized Winners and Losers to count total appearances
+    all_bet_norms = pd.concat([df_bet['W_norm'], df_bet['L_norm']])
+    name_counts = all_bet_norms.value_counts().to_dict()
 
-        for b_name in unique_bet_names:
-            # Using token_sort_ratio handles "Lleyton Hewitt" vs "Hewitt Lleyton"
-            match, score = process.extractOne(b_name, unique_std_names, scorer=fuzz.token_sort_ratio)
-            if score > 80:
+    # 3. Improved Mapping
+    std_players = pd.unique(pd.concat([df['winner_name'], df['loser_name']]))
+    bet_players = pd.unique(pd.concat([df_bet['W_norm'], df_bet['L_norm']]))
+
+    name_map = {}
+    for b_name in bet_players:
+        if pd.isna(b_name) or len(b_name) == 0: continue
+
+        # Get count for the current betting name
+        count = name_counts.get(b_name, 0)
+
+        first_init = b_name[0].upper()
+        potential_matches = [s for s in std_players if s.upper().startswith(first_init)]
+
+        if potential_matches:
+            match, score = process.extractOne(b_name, potential_matches, scorer=fuzz.token_set_ratio)
+
+            if score >= 70:
                 name_map[b_name] = match
-        return name_map
+            else:
+                # Included the count in the print statement
+                print(f"Low Score [{score}] | Count: {count:3} | Betting: {b_name:20} | Match: {match}")
+        else:
+            print(f"No Match   | Count: {count:3} | Name: {b_name}")
 
-    # Run mapping
-    std_players = pd.concat([df['winner_name'], df['loser_name']]).unique()
-    bet_players = pd.concat([df_bet['W_norm'], df_bet['L_norm']]).unique()
-    mapper = build_name_map(std_players, bet_players)
+    df_bet['winner_std_name'] = df_bet['W_norm'].map(name_map)
+    df_bet['loser_std_name'] = df_bet['L_norm'].map(name_map)
 
-    # Apply mapping back to betting df
-    df_bet['winner_std_name'] = df_bet['W_norm'].map(mapper)
-    df_bet['loser_std_name'] = df_bet['L_norm'].map(mapper)
+    # 4. The "Safe" Sort and Merge
+    df = df.sort_values('tourney_date').reset_index(drop=True)
+    df_bet = df_bet.sort_values('bet_match_date').reset_index(drop=True)
 
-    # Sort for merge_asof
-    df = df.sort_values('match_date')
-    df_bet = df_bet.sort_values('match_date')
-
-    # Merge Winner Odds
+    # If merge_asof is still failing, it's often due to duplicate keys.
+    # Let's try a standard merge first on names, then filter by date.
+    # This is often more successful in tennis data.
     merged = pd.merge(
         df,
-        df_bet[['match_date', 'winner_std_name', 'loser_std_name', 'B365W', 'B365L']],
-        left_on=['match_date', 'winner_name', 'loser_name'],
-        right_on=['match_date', 'winner_std_name', 'loser_std_name'],
+        df_bet[['bet_match_date', 'winner_std_name', 'loser_std_name', 'B365W', 'B365L']],
+        left_on=['winner_name', 'loser_name'],
+        right_on=['winner_std_name', 'loser_std_name'],
         how='left'
+    )
+
+    # 5. Post-Merge Filter: Only keep betting lines within 10 days of the tournament
+    # This replaces the logic of merge_asof but is much more "forgiving"
+    days_diff = (merged['bet_match_date'] - merged['tourney_date']).dt.days
+    merged = merged[(days_diff >= -1) & (days_diff <= 12) | (merged['B365W'].isna())]
+
+    # Remove duplicates that can occur from the broad merge
+    merged = merged.sort_values('bet_match_date').drop_duplicates(
+        subset=['tourney_id', 'winner_name', 'loser_name'], keep='first'
     )
 
     return merged
@@ -840,19 +882,22 @@ def data_cleaning():
     df = load_raw_data()
     df = clean_basic_fields(df)
     df = clean_score_fields(df)
-    df = create_rank_order_features(df)
-    df = df.sort_values(["tourney_date", "match_num"])
-    df = compute_elo_features(df)
-    df = compute_pseudo_dates(df)
-    df = compute_fatigue(df)
-    df = compute_age_features(df)
-    df  = compute_height_features(df)
-    df = compute_service_stats(df)
-    df = compute_rolling_h2h(df)
-    df = compute_tournament_history(df)
-    df = compute_elo_velocity(df)
-    df = compute_dominance_ratio(df)
-    df.to_csv("data_cleaned_shuffled.csv", index=False)
+    df = add_bets(df)
+    df.to_csv("post_bets.csv", index=False)
+    #
+    # df = create_rank_order_features(df)
+    # df = df.sort_values(["tourney_date", "match_num"])
+    # df = compute_elo_features(df)
+    # df = compute_pseudo_dates(df)
+    # df = compute_fatigue(df)
+    # df = compute_age_features(df)
+    # df  = compute_height_features(df)
+    # df = compute_service_stats(df)
+    # df = compute_rolling_h2h(df)
+    # df = compute_tournament_history(df)
+    # df = compute_elo_velocity(df)
+    # df = compute_dominance_ratio(df)
+    # df.to_csv("data_cleaned_shuffled.csv", index=False)
 
     return df
 
@@ -1220,4 +1265,4 @@ def feature_engineering():
 
 if __name__ == '__main__':
     data_cleaning()
-    feature_engineering()
+    #feature_engineering()
