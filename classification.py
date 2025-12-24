@@ -943,7 +943,7 @@ def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
 
     # Define filenames for saving plots
     classifier_name = "MLP_Neural_Network"
-    output_filename = f"/visuals/{classifier_name}_Visuals.png"
+    output_filename = f"visuals/{classifier_name}_Visuals.png"
 
     # ---------------------------------------
     # 1. Setup Stratified K-Fold & Hyperparams
@@ -1079,8 +1079,8 @@ def run_naive_bayes(x_train, x_test, y_train, y_test, feature_names):
 
     # Define filenames for saving plots
     classifier_name = "Naive_Bayes"
-    cm_filename = f"{classifier_name}_Confusion_Matrix.png"
-    roc_filename = f"{classifier_name}_ROC_Curve.png"
+    cm_filename = f"visuals/{classifier_name}_Confusion_Matrix.png"
+    roc_filename = f"visuals/{classifier_name}_ROC_Curve.png"
 
     # ---------------------------------------
     # 1. K-fold
@@ -1198,7 +1198,7 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
 
     # Define filenames for saving plots
     classifier_name = "Random_Forest"
-    output_filename = f"/visuals/{classifier_name}_Visuals.png"
+    output_filename = f"visuals/{classifier_name}_Visuals.png"
 
     # ---------------------------------------
     # 1. Setup Stratified K-Fold & Hyperparams
@@ -1324,7 +1324,7 @@ def run_xgboost(x_train, x_test, y_train, y_test, feature_names):
 
     # Define filenames for saving plots
     classifier_name = "XGBoost"
-    output_filename = f"/visuals{classifier_name}_Visuals.png"
+    output_filename = f"visuals/{classifier_name}_Visuals.png"
 
     # ---------------------------------------
     # 1. Setup Stratified K-Fold & Hyperparams
@@ -1409,7 +1409,7 @@ def run_xgboost(x_train, x_test, y_train, y_test, feature_names):
     # Plot 1: Confusion Matrix
     cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=best_model.classes_)
     cm_display.plot(ax=axes[0], cmap='magma')
-    axes[0].set_title(f"{classifier_name} Confusion Matrix")
+    axes[0].set_title(f"visuals/{classifier_name} Confusion Matrix")
 
     # Plot 2: ROC Curve
     axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')

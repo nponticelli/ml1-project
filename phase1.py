@@ -77,8 +77,11 @@ def clean_basic_fields(df):
     ]
 
     # Fill missing values with median for each column
+
     for col in cols_to_fill:
-        df[col] = df[col].fillna(df[col].median())
+        df[col] = df[col].fillna(
+            df.groupby("best_of")[col].transform("median")
+        )
 
     df["round"] = df["round"].fillna(df["round"].mode().iloc[0])
 
@@ -995,27 +998,14 @@ def feature_engineering():
     # ---------------------------------------
     # 2. Select features
     # ---------------------------------------
-    # FEATURES_NUM = [
-    #     "surface_elo_diff",
-    #     "global_elo_diff",
-    #     "ace_pct_diff",
-    #     "fatigue_10d_diff",
-    #     "year_fatigue_diff",
-    #     "prime_age_diff",
-    #     "raw_age_diff",
-    #     "prime_height_diff",
-    #     "service_advantage_diff",
-    #     "tourney_history_diff",
-    #     "dominance_ratio_diff",
-    #     "raw_age_diff_sq",
-    #     "age_fatigue_diff",
-    # ]
+
     FEATURES_NUM = [
+
         "playerA_market_prob",
         "bookie_margin",
 
     ]
-    FEATURES_CAT = ["is_imputed_odds",]
+    FEATURES_CAT = []
     LOG_TARGET = "log_target"
     LIN_TARGET = df["playerA_points_won_pct"]
     LIN_TARGET2 = df["minutes"]
@@ -1144,7 +1134,7 @@ def feature_engineering():
     )
     plt.title("Covariance Matrix Heatmap")
     plt.tight_layout()
-    plt.savefig("covariance_heatmap.png", dpi=300)
+    plt.savefig(f"visuals/covariance_heatmap.png", dpi=300)
     plt.show()
 
     # ---------------------------------------
@@ -1196,7 +1186,7 @@ def feature_engineering():
     plt.grid(True)
     plt.tight_layout()
 
-    plt.savefig('your_actual_cumulative_explained_variance_plot.png')
+    plt.savefig('visuals/your_actual_cumulative_explained_variance_plot.png')
 
     # ---------------------------------------
     # 11. LDA (full feature set)
@@ -1354,5 +1344,5 @@ def feature_engineering():
     print("✅ Exported NON-PCA classification dataset.")
 
 if __name__ == '__main__':
-    #data_cleaning()
-    feature_engineering()
+    data_cleaning()
+    #feature_engineering()
