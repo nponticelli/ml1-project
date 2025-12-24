@@ -31,19 +31,8 @@ def load_and_prepare_data(file_path="phaseII_non_pca_classification.csv"):
     df = pd.read_csv(file_path)
 
     FEATURES_ALL = [
-        "surface_elo_diff",
-        "global_elo_diff",
-        "ace_pct_diff",
-        "fatigue_10d_diff",
-        "year_fatigue_diff",
-        "prime_age_diff",
-        "raw_age_diff",
-        "prime_height_diff",
-        "service_advantage_diff",
-        "tourney_history_diff",
-        "dominance_ratio_diff",
-        "raw_age_diff_sq",
-        "age_fatigue_diff",
+    "playerA_market_prob",
+        "bookie_margin",
     ]
     TARGET = "log_target"
 
@@ -954,7 +943,7 @@ def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
 
     # Define filenames for saving plots
     classifier_name = "MLP_Neural_Network"
-    output_filename = f"{classifier_name}_Visuals.png"
+    output_filename = f"/visuals/{classifier_name}_Visuals.png"
 
     # ---------------------------------------
     # 1. Setup Stratified K-Fold & Hyperparams
@@ -1209,7 +1198,7 @@ def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
 
     # Define filenames for saving plots
     classifier_name = "Random_Forest"
-    output_filename = f"{classifier_name}_Visuals.png"
+    output_filename = f"/visuals/{classifier_name}_Visuals.png"
 
     # ---------------------------------------
     # 1. Setup Stratified K-Fold & Hyperparams
@@ -1335,7 +1324,7 @@ def run_xgboost(x_train, x_test, y_train, y_test, feature_names):
 
     # Define filenames for saving plots
     classifier_name = "XGBoost"
-    output_filename = f"{classifier_name}_Visuals.png"
+    output_filename = f"/visuals{classifier_name}_Visuals.png"
 
     # ---------------------------------------
     # 1. Setup Stratified K-Fold & Hyperparams

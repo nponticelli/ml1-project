@@ -185,10 +185,16 @@ def add_bets(df):
         how='left'
     )
 
-    # 5. Post-Merge Filter: Only keep betting lines within 10 days of the tournament
-    # This replaces the logic of merge_asof but is much more "forgiving"
+    # 5. Strict Filter: Only keep dates/odds that are actually close to the tournament
     days_diff = (merged['bet_match_date'] - merged['tourney_date']).dt.days
-    merged = merged[(days_diff >= -1) & (days_diff <= 12) | (merged['B365W'].isna())]
+
+    # Identify rows that are "Historical Ghosts" (e.g. 2005 match showing up in 2009)
+    mask_too_far = (days_diff < -2) | (days_diff > 14)
+
+    # NULLIFY the betting data for matches that are too far away
+    # This prevents the 1840s bug because pseudo_date won't try to use a 2005 date for a 2009 match
+    cols_to_null = ['bet_match_date', 'B365W', 'B365L']
+    merged.loc[mask_too_far, cols_to_null] = np.nan
 
     # Remove duplicates that can occur from the broad merge
     merged = merged.sort_values('bet_match_date').drop_duplicates(
@@ -416,46 +422,49 @@ def compute_elo_features(df):
     return df
 
 def compute_dates(df):
-    # 1. Initialize with the ground truth (Anchor)
+    # Ensure tourney_date is datetime
+    df['tourney_date'] = pd.to_datetime(df['tourney_date'])
     df['pseudo_date'] = pd.to_datetime(df['bet_match_date'])
 
-    # 2. Fill missing with Round Median (Contextual Backup)
-    # This clusters missing rows with their actual peers
+    # 1. Fill missing with Round Median (Contextual Backup)
     df['pseudo_date'] = df['pseudo_date'].fillna(
         df.groupby(['tourney_id', 'round'])['pseudo_date'].transform('median')
     )
 
-    # 3. Final Fallback: "Last-Played" Rest-Day Logic
+    # 2. Final Fallback: Iterative rest-day logic
     df = df.sort_values(['tourney_date', 'match_num']).reset_index(drop=True)
     player_latest = {}
 
     for idx, row in df.iterrows():
         tid, pA, pB = row['tourney_id'], row['playerA_id'], row['playerB_id']
+        inc = 1 if row['best_of'] == 3 else 2
 
-        if pd.isna(row['pseudo_date']):
-            # Use best_of logic (2 days for 5-setters, 1 for 3-setters)
-            inc = 2 if row['best_of'] == 5 else 1
+        curr_p_date = row['pseudo_date']
 
-            # Look at the most recent actual date these players competed in this tourney
+        # If it's NaT or somehow corrupted (very old date), recalculate
+        if pd.isna(curr_p_date) or curr_p_date.year < 1900:
             date_A = player_latest.get((tid, pA))
             date_B = player_latest.get((tid, pB))
 
-            if date_A or date_B:
-                # Use the latest of the two previous match dates as the baseline
-                base = max(filter(None, [date_A, date_B]))
-                new_date = base + pd.Timedelta(days=inc)
+            valid_dates = [d for d in [date_A, date_B] if pd.notna(d)]
+
+            if valid_dates:
+                # Force strictly to Timestamp objects
+                new_date = pd.to_datetime(max(valid_dates)).normalize() + pd.Timedelta(days=inc)
             else:
-                # First round fallback: use the official tourney start date
-                new_date = row['tourney_date']
+                new_date = row['tourney_date']  # Already normalized above
 
             df.at[idx, 'pseudo_date'] = new_date
+        else:
+            # If it's a valid date, just normalize it to midnight
+            df.at[idx, 'pseudo_date'] = curr_p_date.normalize()
 
-        # CRITICAL: Always update the tracker so the NEXT round knows when these players played
-        player_latest[(tid, pA)] = df.at[idx, 'pseudo_date']
-        player_latest[(tid, pB)] = df.at[idx, 'pseudo_date']
+        # Update tracker with the cleaned date
+        final_date = df.at[idx, 'pseudo_date']
+        player_latest[(tid, pA)] = final_date
+        player_latest[(tid, pB)] = final_date
 
-    # 4. Final Chronological Sort
-    df['pseudo_date'] = pd.to_datetime(df['pseudo_date'])
+    # Final Sort
     df = df.sort_values(['pseudo_date', 'match_num']).reset_index(drop=True)
     return df
 
@@ -925,6 +934,32 @@ def compute_dominance_ratio(df, window=15):
 
     return df
 
+def compute_missing_odds(df):
+    # 1. Calculate Expected Win Probability for Player A based on Elo
+    # Denominator 400 is the standard Elo scaling factor
+    elo_prob_A = 1 / (1 + 10 ** ((df['playerB_combined_elo'] - df['playerA_combined_elo']) / 400))
+    df['is_imputed_odds'] = df['playerA_odds'].isna().astype(int)
+    # 2. Identify missing rows
+    mask = df['playerA_market_prob'].isna()
+
+    # 3. Fill the probabilities
+    df.loc[mask, 'playerA_market_prob'] = elo_prob_A[mask]
+    df.loc[mask, 'playerB_market_prob'] = 1 - elo_prob_A[mask]
+
+    # 4. Handle the Odds columns (playerA_odds, playerB_odds)
+    # We use the median bookie margin to make the odds look like real market prices
+    avg_margin = df['bookie_margin'].median() if df['bookie_margin'].notna().any() else 0.05
+
+    # Implied Odds = 1 / (Probability * (1 + Margin))
+    # This prevents the odds from being 'perfect' 1/p and adds the bookie's cut
+    df.loc[mask, 'playerA_odds'] = 1 / (df.loc[mask, 'playerA_market_prob'] * (1 + avg_margin))
+    df.loc[mask, 'playerB_odds'] = 1 / (df.loc[mask, 'playerB_market_prob'] * (1 + avg_margin))
+
+    # 5. Fill the margin column for these rows
+    df['bookie_margin'] = df['bookie_margin'].fillna(avg_margin)
+
+    return df
+
 def data_cleaning():
 
     df = load_raw_data()
@@ -943,6 +978,7 @@ def data_cleaning():
     df = compute_tournament_history(df)
     df = compute_elo_velocity(df)
     df = compute_dominance_ratio(df)
+    df = compute_missing_odds(df)
     df.to_csv("data_cleaned_shuffled.csv", index=False)
 
     return df
@@ -952,28 +988,34 @@ def feature_engineering():
     # 1. Load dataset
     # ---------------------------------------
     df = pd.read_csv("data_cleaned_shuffled.csv")
+
     df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
     df = df.iloc[3000:].reset_index(drop=True)  # warm-up drop
 
     # ---------------------------------------
     # 2. Select features
     # ---------------------------------------
+    # FEATURES_NUM = [
+    #     "surface_elo_diff",
+    #     "global_elo_diff",
+    #     "ace_pct_diff",
+    #     "fatigue_10d_diff",
+    #     "year_fatigue_diff",
+    #     "prime_age_diff",
+    #     "raw_age_diff",
+    #     "prime_height_diff",
+    #     "service_advantage_diff",
+    #     "tourney_history_diff",
+    #     "dominance_ratio_diff",
+    #     "raw_age_diff_sq",
+    #     "age_fatigue_diff",
+    # ]
     FEATURES_NUM = [
-        "surface_elo_diff",
-        "global_elo_diff",
-        "ace_pct_diff",
-        "fatigue_10d_diff",
-        "year_fatigue_diff",
-        "prime_age_diff",
-        "raw_age_diff",
-        "prime_height_diff",
-        "service_advantage_diff",
-        "tourney_history_diff",
-        "dominance_ratio_diff",
-        "raw_age_diff_sq",
-        "age_fatigue_diff",
+        "playerA_market_prob",
+        "bookie_margin",
+
     ]
-    FEATURES_CAT = []
+    FEATURES_CAT = ["is_imputed_odds",]
     LOG_TARGET = "log_target"
     LIN_TARGET = df["playerA_points_won_pct"]
     LIN_TARGET2 = df["minutes"]
@@ -986,16 +1028,18 @@ def feature_engineering():
     # ---------------------------------------
     # 3. Handle Outliers (IQR Winsorization)
     # ---------------------------------------
-    IQR_cap = ["surface_elo_diff",
-        "global_elo_diff",
-        "fatigue_10d_diff",
-        "year_fatigue_diff",
-        "prime_age_diff",
-        "raw_age_diff",
-        "prime_height_diff",
-               "raw_age_diff_sq",
-               "age_fatigue_diff",
-                       ]
+    # IQR_cap = ["surface_elo_diff",
+    #     "global_elo_diff",
+    #     "fatigue_10d_diff",
+    #     "year_fatigue_diff",
+    #     "prime_age_diff",
+    #     "raw_age_diff",
+    #     "prime_height_diff",
+    #            "raw_age_diff_sq",
+    #            "age_fatigue_diff",
+    #                    ]
+
+    IQR_cap = []
     for col in IQR_cap:
         Q1, Q3 = X[col].quantile([0.25, 0.75])
         IQR = Q3 - Q1
@@ -1310,5 +1354,5 @@ def feature_engineering():
     print("✅ Exported NON-PCA classification dataset.")
 
 if __name__ == '__main__':
-    data_cleaning()
-    #feature_engineering()
+    #data_cleaning()
+    feature_engineering()
