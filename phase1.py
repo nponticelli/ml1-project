@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
 import re
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, PowerTransformer
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, silhouette_score
 from collections import defaultdict
 import matplotlib.pyplot as plt
 from statsmodels.stats.outliers_influence import variance_inflation_factor
@@ -218,7 +220,7 @@ def add_bets(df):
 
     # 4. Binary Feature: Did the Favorite Win?
     # (In tennis, the favorite has the LOWER odds, so the HIGHER implied prob)
-    merged['winner_was_favorite'] = (merged['B365W'] < merged['B365L']).astype(int)
+    merged['upset'] = (merged['B365W'] > merged['B365L']).astype(int)
 
     # 5. Final Rounding (Only at the very end)
     cols_to_round = ['prob_winner_market', 'prob_loser_market', 'bookie_margin']
@@ -244,6 +246,7 @@ def create_rank_order_features(df, seed = 42):
             "clean_score": row["clean_score"],
             "bookie_margin": row.get("bookie_margin", np.nan),
             "bet_match_date": row["bet_match_date"],
+            "upset": row["upset"],
         }
         if val:
             new_row.update({
@@ -990,7 +993,7 @@ def feature_engineering():
     # ---------------------------------------
     # 1. Load dataset
     # ---------------------------------------
-    df = pd.read_csv("data_cleaned_shuffled.csv")
+    df = pd.read_csv("post-cluster.csv")
 
     df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
     df = df.iloc[3000:].reset_index(drop=True)  # warm-up drop
@@ -1343,6 +1346,225 @@ def feature_engineering():
     df_non_pca_export.to_csv("phaseII_non_pca_classification.csv", index=False)
     print("✅ Exported NON-PCA classification dataset.")
 
+def clustering():
+    df = pd.read_csv("data_cleaned_shuffled.csv")
+
+    df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
+
+    def apply_advanced_clustering(df, n_clusters=4, window=20):
+        # --- 1. PREPARE MATCH PERFORMANCE ---
+        pA = df[['playerA_id', 'pseudo_date', 'surface', 'playerA_ace_pct', 'playerB_ace_pct',
+                 'playerA_points_won_pct', 'minutes', 'total_points']].copy()
+        pA.columns = ['pid', 'date', 'surface', 'ace_pct', 'opp_ace_pct', 'pts_won_pct', 'min', 'pts']
+        pA['ace_residual'] = pA['ace_pct'] - pA['opp_ace_pct']
+        pA['min_per_pt'] = pA['min'] / pA['pts']
+
+        pB = df[['playerB_id', 'pseudo_date', 'surface', 'playerB_ace_pct', 'playerA_ace_pct',
+                 'playerB_points_won_pct', 'minutes', 'total_points']].copy()
+        pB.columns = ['pid', 'date', 'surface', 'ace_pct', 'opp_ace_pct', 'pts_won_pct', 'min', 'pts']
+        pB['ace_residual'] = pB['ace_pct'] - pB['opp_ace_pct']
+        pB['min_per_pt'] = pB['min'] / pB['pts']
+
+        # CRITICAL FIX: Reset index to avoid the InvalidIndexError
+        player_history = pd.concat([pA, pB]).sort_values('date').reset_index(drop=True)
+
+        # --- 2. SURFACE-WEIGHTED ROLLING AVERAGES ---
+        def weighted_rolling(group):
+            res = []
+            # Convert to numpy for much faster iteration
+            ace_vals = group['ace_residual'].values
+            min_vals = group['min_per_pt'].values
+            surfaces = group['surface'].values
+
+            for i in range(len(group)):
+                if i < window:
+                    res.append([np.nan, np.nan])
+                    continue
+
+                # Slice the previous 'window' matches
+                # (Note: i is the current match, so slice [i-window : i] is history)
+                h_ace = ace_vals[i - window:i]
+                h_min = min_vals[i - window:i]
+                h_surf = surfaces[i - window:i]
+                current_surf = surfaces[i]
+
+                # Weighting: 2 for same surface, 1 for different
+                weights = np.where(h_surf == current_surf, 2, 1)
+
+                w_ace = np.average(h_ace, weights=weights)
+                w_min = np.average(h_min, weights=weights)
+                res.append([w_ace, w_min])
+            return pd.DataFrame(res, index=group.index, columns=['w_ace_res', 'w_min_pt'])
+
+        print("Calculating weighted surface residuals...")
+        # apply() preserves the index of the group, so concat will work now
+        styled_stats = player_history.groupby('pid', group_keys=False).apply(weighted_rolling)
+        player_history = pd.concat([player_history, styled_stats], axis=1)
+
+        # --- 3. CLUSTERING ---
+        clean_history = player_history.dropna().copy()
+        features = ['w_ace_res', 'w_min_pt']
+
+        pt = PowerTransformer(method='yeo-johnson')
+        scaled_data = pt.fit_transform(clean_history[features])
+
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        clean_history['style_id'] = kmeans.fit_predict(scaled_data)
+
+        # --- 4. MAP BACK TO MAIN DF ---
+        # Since we reset the index earlier, we definitely need the (pid, date) composite key
+        style_map = clean_history.set_index(['pid', 'date'])['style_id'].to_dict()
+
+        df['pA_style'] = df.apply(lambda row: style_map.get((row['playerA_id'], row['pseudo_date']), -1), axis=1)
+        df['pB_style'] = df.apply(lambda row: style_map.get((row['playerB_id'], row['pseudo_date']), -1), axis=1)
+
+        return df, kmeans, pt
+
+    df, kmeans, scaler = apply_advanced_clustering(df, n_clusters=3, window=20)
+
+
+
+    def find_optimal_clusters():
+        # 1. Load your processed data
+        df = pd.read_csv("data_cleaned_shuffled.csv")
+        df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
+
+        # 2. Extract and Prepare Style Features (Pre-match history only)
+        cols_A = ['playerA_id', 'pseudo_date', 'playerA_ace', 'playerA_svpt', 'minutes', 'total_points']
+        cols_B = ['playerB_id', 'pseudo_date', 'playerB_ace', 'playerB_svpt', 'minutes', 'total_points']
+
+        pA = df[cols_A].copy().rename(columns={c: c.replace('playerA_', '') for c in cols_A})
+        pB = df[cols_B].copy().rename(columns={c: c.replace('playerB_', '') for c in cols_B})
+        pA.columns = pB.columns = ['pid', 'date', 'ace', 'svpt', 'min', 'pts']
+
+        player_history = pd.concat([pA, pB]).sort_values('date')
+
+        # Calculate rolling ratios (using window of 20)
+        window = 20
+        group = player_history.groupby('pid')
+        player_history['roll_ace_rate'] = (group['ace'].transform(lambda x: x.rolling(window).mean()) /
+                                           group['svpt'].transform(lambda x: x.rolling(window).mean()))
+        player_history['roll_min_per_pt'] = (group['min'].transform(lambda x: x.rolling(window).mean()) /
+                                             group['pts'].transform(lambda x: x.rolling(window).mean()))
+
+        # Drop NaNs and scale
+        X_clustering = player_history[['roll_ace_rate', 'roll_min_per_pt']].dropna().copy()
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_clustering)
+
+        # 3. Iterative Testing
+        wcss = []
+        sil_scores = []
+        k_range = range(2, 20)
+
+        print("Running cluster evaluation...")
+        for k in k_range:
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(X_scaled)
+
+            wcss.append(kmeans.inertia_)
+
+            # Sample for Silhouette if dataset is large (>10k rows) to save time
+            if len(X_scaled) > 10000:
+                idx = np.random.choice(len(X_scaled), 10000, replace=False)
+                score = silhouette_score(X_scaled[idx], labels[idx])
+            else:
+                score = silhouette_score(X_scaled, labels)
+            sil_scores.append(score)
+            print(f"k={k} complete.")
+
+        # 4. Visualization
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+        # Elbow Plot
+        ax1.plot(k_range, wcss, marker='o', color='royalblue', linewidth=2)
+        ax1.set_title('Elbow Method: Optimal k?', fontsize=14)
+        ax1.set_xlabel('Number of Clusters (k)', fontsize=12)
+        ax1.set_ylabel('WCSS (Inertia)', fontsize=12)
+        ax1.grid(True, linestyle='--', alpha=0.7)
+
+        # Silhouette Plot
+        ax2.plot(k_range, sil_scores, marker='s', color='forestgreen', linewidth=2)
+        ax2.set_title('Silhouette Method: Cluster Quality', fontsize=14)
+        ax2.set_xlabel('Number of Clusters (k)', fontsize=12)
+        ax2.set_ylabel('Silhouette Score', fontsize=12)
+        ax2.grid(True, linestyle='--', alpha=0.7)
+
+        plt.tight_layout()
+        plt.savefig("cluster_optimization_results.png")
+        plt.show()
+
+    # Run the evaluation
+    #find_optimal_clusters()
+
+    def calculate_style_performance(df, window=15, min_samples=3):
+        # Sort to ensure chronological order for rolling history
+        df = df.sort_values(['pseudo_date', 'match_num']).reset_index(drop=True)
+
+        # Store history in a dictionary: {player_id: {style_id: [list_of_outperformances]}}
+        # Outperformance = Actual Result (1 or 0) - Market Probability
+        history = {}
+
+        pa_style_alpha = []
+        pb_style_alpha = []
+
+        for row in df.itertuples():
+            pA, pB = row.playerA_id, row.playerB_id
+            sA, sB = row.pA_style, row.pB_style
+
+            # --- 1. GET PLAYER A'S ALPHA vs B'S STYLE ---
+            alpha_A = 0
+            if pA in history and sB in history[pA]:
+                recent_perf = history[pA][sB][-window:]
+                if len(recent_perf) >= min_samples:
+                    alpha_A = np.mean(recent_perf)
+
+            # --- 2. GET PLAYER B'S ALPHA vs A'S STYLE ---
+            alpha_B = 0
+            if pB in history and sA in history[pB]:
+                recent_perf = history[pB][sA][-window:]
+                if len(recent_perf) >= min_samples:
+                    alpha_B = np.mean(recent_perf)
+
+            pa_style_alpha.append(alpha_A)
+            pb_style_alpha.append(alpha_B)
+
+            # --- 3. UPDATE HISTORY AFTER MATCH (No Leakage) ---
+            # Skip update if style is -1 (unclustered)
+            if sA != -1 and sB != -1:
+                # Result for A is 'log_target' (1 if A wins, 0 if B wins)
+                res_A = 1 if row.log_target == 1 else 0
+                res_B = 1 - res_A
+
+                # Calculate how much they over/under performed the market
+                # A's performance against B's style
+                diff_A = res_A - row.playerA_market_prob
+                # B's performance against A's style
+                diff_B = res_B - row.playerB_market_prob
+
+                # Update A's history vs style sB
+                if pA not in history: history[pA] = {}
+                if sB not in history[pA]: history[pA][sB] = []
+                history[pA][sB].append(diff_A)
+
+                # Update B's history vs style sA
+                if pB not in history: history[pB] = {}
+                if sA not in history[pB]: history[pB][sA] = []
+                history[pB][sA].append(diff_B)
+
+        df['pA_style_alpha'] = pa_style_alpha
+        df['pB_style_alpha'] = pb_style_alpha
+
+        # The final feature: The difference in style-specific 'overperformance'
+        df['style_alpha_diff'] = df['pA_style_alpha'] - df['pB_style_alpha']
+
+        return df
+
+    df = calculate_style_performance(df)
+
+    df.to_csv("post-cluster.csv", index=False)
+
 if __name__ == '__main__':
     data_cleaning()
+    clustering()
     #feature_engineering()

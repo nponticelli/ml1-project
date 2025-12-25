@@ -46258,7 +46258,7 @@ ATP,Location,Tournament,Date,Series,Court,Surface,Round,Best of,Winner,Loser,WRa
 4,Melbourne,Australian Open,1/23/2020,Grand Slam,Outdoor,Hard,2nd Round,5,Kyrgios N.,Simon G.,26,61,6,2,6,4,4,6,7,5,,,3,1,Completed,1.2,4.5,2020,TRUE
 4,Melbourne,Australian Open,1/23/2020,Grand Slam,Outdoor,Hard,2nd Round,5,Wawrinka S.,Seppi A.,15,85,4,6,7,5,6,3,3,6,6,4,3,2,Completed,1.22,4.33,2020,TRUE
 4,Melbourne,Australian Open,1/23/2020,Grand Slam,Outdoor,Hard,2nd Round,5,Fritz T.,Anderson K.,34,122,4,6,6,7,7,6,6,2,6,2,3,2,Completed,1.8,2,2020,TRUE
-4,Melbourne,Australian Open,1/23/2020,Grand Slam,Outdoor,Hard,2nd Round,5,Nadal R.,Delbonis F.,1,76,6,3,7,6,6,1,,,,,3,0,Completed,29,0.967,2020,FALSE
+4,Melbourne,Australian Open,1/23/2020,Grand Slam,Outdoor,Hard,2nd Round,5,Nadal R.,Delbonis F.,1,76,6,3,7,6,6,1,,,,,3,0,Completed,1.01,29.89,2020,FALSE
 4,Melbourne,Australian Open,1/24/2020,Grand Slam,Outdoor,Hard,3rd Round,5,Schwartzman D.,Lajovic D.,14,27,6,2,6,3,7,6,,,,,3,0,Completed,1.36,3.2,2020,TRUE
 4,Melbourne,Australian Open,1/24/2020,Grand Slam,Outdoor,Hard,3rd Round,5,Fucsovics M.,Paul T.,67,80,6,1,6,1,6,4,,,,,3,0,Completed,1.72,2.1,2020,TRUE
 4,Melbourne,Australian Open,1/24/2020,Grand Slam,Outdoor,Hard,3rd Round,5,Cilic M.,Bautista Agut R.,39,9,6,7,6,4,6,0,5,7,6,3,3,2,Completed,3.2,1.36,2020,FALSE
@@ -47017,7 +47017,7 @@ ATP,Location,Tournament,Date,Series,Court,Surface,Round,Best of,Winner,Loser,WRa
 22,Paris,French Open,10/1/2020,Grand Slam,Outdoor,Clay,2nd Round,5,Dimitrov G.,Martin A.,20,102,6,4,7,6,6,1,,,,,3,0,Completed,1.12,6,2020,TRUE
 22,Paris,French Open,10/1/2020,Grand Slam,Outdoor,Clay,2nd Round,5,Galan D.,Sandgren T.,153,47,6,2,6,2,6,3,,,,,3,0,Completed,3.2,1.36,2020,FALSE
 22,Paris,French Open,10/1/2020,Grand Slam,Outdoor,Clay,2nd Round,5,Carreno Busta P.,Pella G.,18,37,6,3,6,2,6,1,,,,,3,0,Completed,1.28,3.75,2020,TRUE
-22,Paris,French Open,10/1/2020,Grand Slam,Outdoor,Clay,2nd Round,5,Djokovic N.,Berankis R.,1,66,6,1,6,2,6,2,,,,,3,0,Completed,34,0.971,2020,FALSE
+22,Paris,French Open,10/1/2020,Grand Slam,Outdoor,Clay,2nd Round,5,Djokovic N.,Berankis R.,1,66,6,1,6,2,6,2,,,,,3,0,Completed,1.01,28,2020,FALSE
 22,Paris,French Open,10/1/2020,Grand Slam,Outdoor,Clay,2nd Round,5,Bedene A.,Milojevic N.,56,144,7,5,2,6,6,1,7,6,,,3,1,Completed,1.8,2,2020,TRUE
 22,Paris,French Open,10/1/2020,Grand Slam,Outdoor,Clay,2nd Round,5,Tsitsipas S.,Cuevas P.,6,60,6,1,6,4,6,2,,,,,3,0,Completed,1.22,4.33,2020,TRUE
 22,Paris,French Open,10/1/2020,Grand Slam,Outdoor,Clay,2nd Round,5,Anderson K.,Lajovic D.,118,24,6,2,6,4,4,6,3,6,6,3,3,2,Completed,2.62,1.5,2020,FALSE
@@ -47587,7 +47587,7 @@ ATP,Location,Tournament,Date,Series,Court,Surface,Round,Best of,Winner,Loser,WRa
 5,Melbourne,Australian Open,2/10/2021,Grand Slam,Outdoor,Hard,2nd Round,5,Auger-Aliassime F.,Duckworth J.,19,105,6,4,6,1,6,2,,,,,3,0,Completed,1.2,4.5,2021,TRUE
 5,Melbourne,Australian Open,2/10/2021,Grand Slam,Outdoor,Hard,2nd Round,5,Schwartzman D.,Muller A.,9,210,6,2,6,0,6,3,,,,,3,0,Completed,1.08,8,2021,TRUE
 5,Melbourne,Australian Open,2/10/2021,Grand Slam,Outdoor,Hard,2nd Round,5,Raonic M.,Moutet C.,14,71,6,7,6,1,6,1,6,4,,,3,1,Completed,1.12,6,2021,TRUE
-5,Melbourne,Australian Open,2/10/2021,Grand Slam,Outdoor,Hard,2nd Round,5,Djokovic N.,Tiafoe F.,1,64,6,3,6,7,7,6,6,3,,,3,1,Completed,29,0.967,2021,FALSE
+5,Melbourne,Australian Open,2/10/2021,Grand Slam,Outdoor,Hard,2nd Round,5,Djokovic N.,Tiafoe F.,1,64,6,3,6,7,7,6,6,3,,,3,1,Completed,1.02,24.5,2021,FALSE
 5,Melbourne,Australian Open,2/10/2021,Grand Slam,Outdoor,Hard,2nd Round,5,Thiem D.,Koepfer D.,3,70,6,4,6,0,6,2,,,,,3,0,Completed,1.06,10,2021,TRUE
 5,Melbourne,Australian Open,2/10/2021,Grand Slam,Outdoor,Hard,2nd Round,5,Lajovic D.,Bublik A.,27,45,6,4,7,6,4,6,6,3,,,3,1,Completed,2.75,1.44,2021,FALSE
 5,Melbourne,Australian Open,2/10/2021,Grand Slam,Outdoor,Hard,2nd Round,5,Fritz T.,Opelka R.,31,38,4,6,7,6,6,7,7,6,6,2,3,2,Completed,1.66,2.2,2021,TRUE
@@ -48553,7 +48553,7 @@ ATP,Location,Tournament,Date,Series,Court,Surface,Round,Best of,Winner,Loser,WRa
 30,Paris,French Open,6/1/2021,Grand Slam,Outdoor,Clay,1st Round,5,Berrettini M.,Daniel T.,9,113,6,0,6,4,4,6,6,4,,,3,1,Completed,1.07,9,2021,TRUE
 30,Paris,French Open,6/1/2021,Grand Slam,Outdoor,Clay,1st Round,5,Kwon S.W.,Anderson K.,91,100,7,5,6,4,2,6,7,6,,,3,1,Completed,2.75,1.44,2021,FALSE
 30,Paris,French Open,6/1/2021,Grand Slam,Outdoor,Clay,1st Round,5,Cuevas P.,Pouille L.,92,86,6,3,6,1,6,3,,,,,3,0,Completed,1.4,3,2021,TRUE
-30,Paris,French Open,6/1/2021,Grand Slam,Outdoor,Clay,1st Round,5,Djokovic N.,Sandgren T.,1,66,6,2,6,4,6,2,,,,,3,0,Completed,29,0.967,2021,FALSE
+30,Paris,French Open,6/1/2021,Grand Slam,Outdoor,Clay,1st Round,5,Djokovic N.,Sandgren T.,1,66,6,2,6,4,6,2,,,,,3,0,Completed,1.01,32.24,2021,FALSE
 30,Paris,French Open,6/2/2021,Grand Slam,Outdoor,Clay,2nd Round,5,Delbonis F.,Andujar P.,51,68,4,6,6,1,3,6,6,3,6,2,3,2,Completed,1.66,2.2,2021,TRUE
 30,Paris,French Open,6/2/2021,Grand Slam,Outdoor,Clay,2nd Round,5,Djere L.,Kecmanovic M.,55,48,4,6,4,6,6,3,6,2,6,3,3,2,Completed,1.66,2.2,2021,TRUE
 30,Paris,French Open,6/2/2021,Grand Slam,Outdoor,Clay,2nd Round,5,Zverev A.,Safiullin R.,6,182,7,6,6,3,7,6,,,,,3,0,Completed,1.03,15,2021,TRUE
@@ -48598,7 +48598,7 @@ ATP,Location,Tournament,Date,Series,Court,Surface,Round,Best of,Winner,Loser,WRa
 30,Paris,French Open,6/5/2021,Grand Slam,Outdoor,Clay,3rd Round,5,Schwartzman D.,Kohlschreiber P.,10,132,6,4,6,2,6,1,,,,,3,0,Completed,1.16,5,2021,TRUE
 30,Paris,French Open,6/5/2021,Grand Slam,Outdoor,Clay,3rd Round,5,Struff J.L.,Alcaraz C.,42,97,6,4,7,6,6,2,,,,,3,0,Completed,2.5,1.53,2021,FALSE
 30,Paris,French Open,6/5/2021,Grand Slam,Outdoor,Clay,3rd Round,5,Sinner J.,Ymer M.,19,105,6,1,7,5,6,3,,,,,3,0,Completed,1.12,6,2021,TRUE
-30,Paris,French Open,6/5/2021,Grand Slam,Outdoor,Clay,3rd Round,5,Djokovic N.,Berankis R.,1,93,6,1,6,4,6,1,,,,,3,0,Completed,29,0.967,2021,FALSE
+30,Paris,French Open,6/5/2021,Grand Slam,Outdoor,Clay,3rd Round,5,Djokovic N.,Berankis R.,1,93,6,1,6,4,6,1,,,,,3,0,Completed,1.01,32.24,2021,FALSE
 30,Paris,French Open,6/5/2021,Grand Slam,Outdoor,Clay,3rd Round,5,Nadal R.,Norrie C.,3,45,6,3,6,3,6,3,,,,,3,0,Completed,1.02,19,2021,TRUE
 30,Paris,French Open,6/5/2021,Grand Slam,Outdoor,Clay,3rd Round,5,Berrettini M.,Kwon S.W.,9,91,7,6,6,3,6,4,,,,,3,0,Completed,1.07,9,2021,TRUE
 30,Paris,French Open,6/5/2021,Grand Slam,Outdoor,Clay,3rd Round,5,Federer R.,Koepfer D.,8,59,7,6,6,7,7,6,7,5,,,3,1,Completed,1.3,3.5,2021,TRUE
@@ -54567,7 +54567,7 @@ ATP,Location,Tournament,Date,Series,Court,Surface,Round,Best of,Winner,Loser,WRa
 50,Winston-Salem,Winston-Salem Open at Wake Forest University,8/25/2023,ATP250,Outdoor,Hard,Quarterfinals,3,Baez S.,Djere L.,42,34,6,3,6,0,,,,,,,2,0,Completed,2.2,1.67,2023,FALSE
 50,Winston-Salem,Winston-Salem Open at Wake Forest University,8/25/2023,ATP250,Outdoor,Hard,Semifinals,3,Lehecka J.,Korda S.,35,33,,,,,,,,,,,,,Walkover,2.5,1.53,2023,FALSE
 50,Winston-Salem,Winston-Salem Open at Wake Forest University,8/25/2023,ATP250,Outdoor,Hard,Semifinals,3,Baez S.,Coric B.,42,29,6,3,6,7,7,6,,,,,2,1,Completed,3,1.4,2023,FALSE
-50,Winston-Salem,Winston-Salem Open at Wake Forest University,8/26/2023,ATP250,Outdoor,Hard,The Final,3,Baez S.,Lehecka J.,42,35,6,4,6,3,,,,,,,2,0,Completed,2.38,1.57,2023,FALSE
+50,Winston-Salem,Winston-Salem Open at Wake Forest University,8/26/2023,ATP250,Outdoor,Hard,The Final,3,Baez S.,Lehecka J.,42,35,6,4,6,3,,,,,,,2,0,Completed,1.4,1.65,2023,FALSE
 51,New York,US Open,8/28/2023,Grand Slam,Outdoor,Hard,1st Round,5,Shelton B.,Cachin P.,47,66,1,6,6,3,6,2,6,4,,,3,1,Completed,1.17,5,2023,TRUE
 51,New York,US Open,8/28/2023,Grand Slam,Outdoor,Hard,1st Round,5,Ofner S.,Borges N.,58,79,7,6,3,6,7,6,6,4,,,3,1,Completed,1.67,2.2,2023,TRUE
 51,New York,US Open,8/28/2023,Grand Slam,Outdoor,Hard,1st Round,5,Zhang Zh.,Wolf J.J.,67,45,7,5,7,5,6,7,4,6,6,3,3,2,Completed,3.2,1.36,2023,FALSE
