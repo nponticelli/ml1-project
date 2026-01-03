@@ -26,13 +26,19 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 
-def load_and_prepare_data(file_path="phaseII_non_pca_classification.csv"):
+def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):
 
     df = pd.read_csv(file_path)
 
     FEATURES_ALL = [
-    "playerA_market_prob",
-        "bookie_margin",
+        "PC1",
+        "PC2",
+        "PC3",
+        "PC4",
+        "PC5",
+        "PC6",
+        "PC7",
+        "PC8",
     ]
     TARGET = "log_target"
 

@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 import re
-
 from sklearn.cluster import KMeans
+from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler, OneHotEncoder, PowerTransformer
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
@@ -99,13 +99,23 @@ def clean_basic_fields(df):
                 errors="coerce",
             )
 
+    print(f"Matches before W/O,RET,Walkover removal: {len(df)}")
+
+    # Create a list of the exact strings to remove
+    exclude_list = ['W/O', 'RET', 'Walkover']
+
+    # Filter the dataframe to keep only rows NOT in that list
+    df = df[~df['score'].isin(exclude_list)].copy()
+
+    print(f"Matches remaining: {len(df)}")
+
     return df
 
 def add_bets(df):
     df_bet = pd.read_csv("betting_odds.csv")
 
     # 1. Clean and Filter
-    df = df[df['tourney_date'].dt.year >= 2003].copy()
+    df = df[df['tourney_date'].dt.year >= 2000].copy()
     # This tells pandas: "Try to guess each date individually, but usually assume Month/Day/Year"
     df_bet['bet_match_date'] = pd.to_datetime(df_bet['Date'], format='mixed', dayfirst=False)
     df_bet = df_bet[df_bet['bet_match_date'].dt.year >= 2003].copy()
@@ -475,87 +485,110 @@ def compute_dates(df):
     return df
 
 def compute_fatigue(df):
-    # Ensure df sorted by chronological order
     df = df.sort_values("pseudo_date").reset_index(drop=True)
 
-    # Preallocate output columns
-    for col in [
-        "playerA_last_minutes", "playerB_last_minutes",
-        "playerA_fatigue_10d", "playerB_fatigue_10d",
-        "playerA_year_fatigue", "playerB_year_fatigue",
-        "playerA_rusty", "playerB_rusty",
-        "last_minutes_diff", "fatigue_10d_diff", "year_fatigue_diff",
-        "rusty_diff"
-    ]:
-        df[col] = 0.0
+    # 1. Initialize result columns
+    df['pA_fatigue_load'] = 0.0
+    df['pB_fatigue_load'] = 0.0
 
-    # History per player: list of (date, minutes)
-    match_history = defaultdict(list)
+    # Track match history: {player_id: [(date, minutes, win_binary)]}
+    history = defaultdict(list)
 
-    THREE_DAYS = pd.Timedelta(days=3)
-    TEN_DAYS = pd.Timedelta(days=10)
-    SIXTY_DAYS = pd.Timedelta(days=60)
+    # Half-life of 2 days (48 hours) for the decay
+    # Formula: Load = Minutes * exp(-lambda * days_passed)
+    HALFLIFE = 2.0
+    DECAY_LAMBDA = np.log(2) / HALFLIFE
 
     for idx, row in df.iterrows():
+        curr_date = row["pseudo_date"]
+        pA, pB = row["playerA_id"], row["playerB_id"]
+
+        def calculate_decayed_load(player_id, target_date):
+            player_hist = history[player_id]
+            if not player_hist: return 0.0
+
+            total_load = 0.0
+            for m_date, m_mins, _ in player_hist:
+                days_diff = (target_date - m_date).total_seconds() / (3600 * 24)
+                # Only consider matches in the last 10 days to keep it efficient
+                if 0 < days_diff <= 10:
+                    total_load += m_mins * np.exp(-DECAY_LAMBDA * days_diff)
+            return total_load
+
+        # Calculate current load before updating history
+        df.at[idx, 'pA_fatigue_load'] = calculate_decayed_load(pA, curr_date)
+        df.at[idx, 'pB_fatigue_load'] = calculate_decayed_load(pB, curr_date)
+
+        # Update history (Assuming 'label' is 1 if playerA won)
+        history[pA].append((curr_date, row["minutes"], row["log_target"]))
+        history[pB].append((curr_date, row["minutes"], 1 - row["log_target"]))
+
+    df['fatigue_load_diff'] = df['pA_fatigue_load'] - df['pB_fatigue_load']
+
+    print("Average fatigue load: ", np.mean(df['pA_fatigue_load']))
+
+    return df
+
+def compute_fatigue_sensitivity(df):
+    """
+    Calculates a non-linear 'Fatigue Tax' based on individual player
+    sensitivity to physical load using a quadratic (parabolic) fit.
+    """
+    # 1. Ensure chronological order to prevent leakage
+    df = df.sort_values("pseudo_date").reset_index(drop=True)
+
+    # Store history for slope calculation: {pid: [[load, residual], ...]}
+    # Residual = (Actual Result - Market Probability)
+    player_histories = defaultdict(list)
+
+    # Initialize output columns
+    df['pA_fatigue_tax'] = 0.0
+    df['pB_fatigue_tax'] = 0.0
+
+    # Minimum matches to start fitting a parabola (Inverted-U)
+    # Below this, we use a global 'prior' to avoid wild volatility
+    MIN_SAMPLES = 15
+
+    for idx, row in df.iterrows():
+        pA, pB = row["playerA_id"], row["playerB_id"]
+        loadA, loadB = row["pA_fatigue_load"], row["pB_fatigue_load"]
         date = row["pseudo_date"]
-        year = str(row["tourney_id"])[:4]
 
-        pA = row["playerA_id"]
-        pB = row["playerB_id"]
+        # --- INTERNAL FUNCTION: GET THE TAX ---
+        def calculate_tax(pid, current_load, match_date):
+            hist = player_histories[pid]  # [load, residual, date]
+            if len(hist) < MIN_SAMPLES: return 0.0
 
-        # --- LAST MATCH MINUTES (ONLY IF LAST MATCH WITHIN 3 DAYS) ---
-        def get_last_minutes(player):
-            hist = match_history[player]
-            if not hist:
-                return 0
-            last_date, last_min = hist[-1]
-            if last_date < date and last_date >= date - THREE_DAYS:
-                return last_min
-            return 0
+            # Calculate 'Weights' based on match recency
+            # Matches from 5 years ago get almost 0 weight
+            HALFLIFE_DAYS = 730  # Adjust focus to roughly the last 2 years
+            X, Y, weights = [], [], []
 
-        df.at[idx, "playerA_last_minutes"] = get_last_minutes(pA)
-        df.at[idx, "playerB_last_minutes"] = get_last_minutes(pB)
+            for h_load, h_res, h_date in hist:
+                days_ago = (match_date - h_date).days
+                weight = np.exp(-np.log(2) * days_ago / HALFLIFE_DAYS)
 
-        # --- FATIGUE LAST 10 DAYS ---
-        def get_fatigue_10d(player):
-            return sum(
-                minutes for d, minutes in match_history[player]
-                if (date - TEN_DAYS) <= d < date
-            )
+                X.append([h_load, h_load ** 2])
+                Y.append(h_res)
+                weights.append(weight)
 
-        df.at[idx, "playerA_fatigue_10d"] = get_fatigue_10d(pA)
-        df.at[idx, "playerB_fatigue_10d"] = get_fatigue_10d(pB)
+            model = LinearRegression().fit(X, Y, sample_weight=weights)
+            return (model.coef_[0] * current_load) + (model.coef_[1] * (current_load ** 2))
 
-        # --- YEAR FATIGUE ---
-        def get_year_fatigue(player):
-            return sum(
-                minutes for d, minutes in match_history[player]
-                if str(d.year) == year and d < date
-            )
+        # --- APPLY TAX TO CURRENT MATCH ---
+        df.at[idx, 'pA_fatigue_tax'] = calculate_tax(pA, loadA, date)
+        df.at[idx, 'pB_fatigue_tax'] = calculate_tax(pB, loadB, date)
 
-        df.at[idx, "playerA_year_fatigue"] = get_year_fatigue(pA)
-        df.at[idx, "playerB_year_fatigue"] = get_year_fatigue(pB)
+        # --- UPDATE PLAYER HISTORIES AFTER CALCULATION (No Leakage) ---
+        # Residual captures if they played better (pos) or worse (neg) than odds
+        resA = row['log_target'] - row['playerA_market_prob']
+        resB = (1 - row['log_target']) - (row['playerB_market_prob'])
 
-        # --- RUSTINESS (no match in over 30 days) ---
-        def get_rustiness(player):
-            hist = match_history[player]
-            if not hist:
-                return 1  # no prior matches means very rusty
-            last_date, _ = hist[-1]
-            return 1 if last_date < date - SIXTY_DAYS else 0
+        player_histories[pA].append([loadA, resA, date])
+        player_histories[pB].append([loadB, resB, date])
 
-        df.at[idx, "playerA_rusty"] = get_rustiness(pA)
-        df.at[idx, "playerB_rusty"] = get_rustiness(pB)
-
-        # --- UPDATE HISTORY AFTER calculations ---
-        match_history[pA].append((date, row["minutes"]))
-        match_history[pB].append((date, row["minutes"]))
-
-    # Differences
-    df["last_minutes_diff"] = df["playerA_last_minutes"] - df["playerB_last_minutes"]
-    df["fatigue_10d_diff"] = df["playerA_fatigue_10d"] - df["playerB_fatigue_10d"]
-    df["year_fatigue_diff"] = df["playerA_year_fatigue"] - df["playerB_year_fatigue"]
-    df["rusty_diff"] = df["playerA_rusty"] - df["playerB_rusty"]
+    # Final feature: The relative fatigue disadvantage
+    df['fatigue_tax_diff'] = df['pA_fatigue_tax'] - df['pB_fatigue_tax']
 
     return df
 
@@ -968,23 +1001,26 @@ def compute_missing_odds(df):
 
 def data_cleaning():
 
+    #Basic data cleaning
     df = load_raw_data()
     df = clean_basic_fields(df)
     df = clean_score_fields(df)
     df = add_bets(df)
-    df.to_csv("post_bets.csv", index=False)
     df = create_rank_order_features(df)
     df = compute_dates(df)
-    df = compute_elo_features(df)
-    df = compute_fatigue(df)
-    df = compute_age_features(df)
-    df  = compute_height_features(df)
-    df = compute_service_stats(df)
-    df = compute_rolling_h2h(df)
-    df = compute_tournament_history(df)
-    df = compute_elo_velocity(df)
-    df = compute_dominance_ratio(df)
     df = compute_missing_odds(df)
+    df = compute_fatigue(df)
+    #Performance features
+
+    df = compute_elo_features(df)
+    df = compute_fatigue_sensitivity(df)
+    #df = compute_age_features(df)
+    #df  = compute_height_features(df)
+    #df = compute_service_stats(df)
+    #df = compute_rolling_h2h(df)
+    #df = compute_tournament_history(df)
+    #df = compute_elo_velocity(df)
+    #df = compute_dominance_ratio(df)
     df.to_csv("data_cleaned_shuffled.csv", index=False)
 
     return df
@@ -993,21 +1029,30 @@ def feature_engineering():
     # ---------------------------------------
     # 1. Load dataset
     # ---------------------------------------
-    df = pd.read_csv("post-cluster.csv")
+    df = pd.read_csv("data_cleaned_shuffled.csv")
 
     df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
-    df = df.iloc[3000:].reset_index(drop=True)  # warm-up drop
+    df = df.iloc[10000:].reset_index(drop=True)  # warm-up drop
+    df = df[df["is_imputed_odds"] == 0]
 
     # ---------------------------------------
     # 2. Select features
     # ---------------------------------------
 
     FEATURES_NUM = [
-
         "playerA_market_prob",
         "bookie_margin",
-
+        "pA_fatigue_load",
+        "pB_fatigue_load",
+        "fatigue_load_diff",
+        "pA_fatigue_tax",
+        "pB_fatigue_tax",
+        "fatigue_tax_diff",
+        "playerA_surface_elo",
+        "playerB_surface_elo",
+        "surface_elo_diff",
     ]
+
     FEATURES_CAT = []
     LOG_TARGET = "log_target"
     LIN_TARGET = df["playerA_points_won_pct"]
@@ -1032,7 +1077,9 @@ def feature_engineering():
     #            "age_fatigue_diff",
     #                    ]
 
-    IQR_cap = []
+    IQR_cap = [
+
+               ]
     for col in IQR_cap:
         Q1, Q3 = X[col].quantile([0.25, 0.75])
         IQR = Q3 - Q1
@@ -1110,19 +1157,19 @@ def feature_engineering():
     else:
         print("\nCondition Number: Not applicable (only one feature).")
 
-    # ---------------------------------------
-    # 5b. Variance Inflation Factor (VIF)
-    # ---------------------------------------
+    # # ---------------------------------------
+    # # 5b. Variance Inflation Factor (VIF)
+    # # ---------------------------------------
     vif_data = pd.DataFrame()
     vif_data["Feature"] = FEATURES_NUM
     vif_data["VIF"] = [variance_inflation_factor(X_train_num_scaled, i) for i in range(X_train_num_scaled.shape[1])]
     print("\nVariance Inflation Factors (VIF):")
     print(vif_data)
-
-    # ---------------------------------------
-    # 7. Covariance matrix (UNSTANDARDIZED numerical features)
-    # ---------------------------------------
-    # Use X_train_raw[FEATURES_NUM] because this is before scaling
+    #
+    # # ---------------------------------------
+    # # 7. Covariance matrix (UNSTANDARDIZED numerical features)
+    # # ---------------------------------------
+    # # Use X_train_raw[FEATURES_NUM] because this is before scaling
     cov_matrix = np.cov(X_train_raw[FEATURES_NUM].to_numpy(), rowvar=False)
 
     print("\nRaw Covariance Matrix (Numerical Features Only):")
@@ -1139,20 +1186,20 @@ def feature_engineering():
     plt.tight_layout()
     plt.savefig(f"visuals/covariance_heatmap.png", dpi=300)
     plt.show()
-
-    # ---------------------------------------
-    # 8. Pearson correlation matrix
-    # ---------------------------------------
+    #
+    # # ---------------------------------------
+    # # 8. Pearson correlation matrix
+    # # ---------------------------------------
     corr_matrix = pd.DataFrame(X_train_num_scaled, columns=FEATURES_NUM).corr()
     plt.figure(figsize=(16, 8))
     sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
     plt.title("Pearson Correlation — Numerical Features")
     plt.tight_layout()
     plt.show()
-
-    # ---------------------------------------
-    # 10. PCA (numerical only)
-    # ---------------------------------------
+    #
+    # # ---------------------------------------
+    # # 10. PCA (numerical only)
+    # # ---------------------------------------
     pca = PCA(n_components=len(FEATURES_NUM))
     X_train_pca = pca.fit_transform(X_train_num_scaled)
     X_test_pca = pca.transform(X_test_num_scaled)
@@ -1160,8 +1207,8 @@ def feature_engineering():
     explained_variance_ratio = np.array(pca.explained_variance_ratio_)
     # Calculate the cumulative explained variance
     cumulative_variance = np.cumsum(explained_variance_ratio)
-
-    # Create component indices for the x-axis
+    #
+    # # Create component indices for the x-axis
     n_components = len(explained_variance_ratio)
     components = np.arange(1, n_components + 1)
 
@@ -1240,7 +1287,7 @@ def feature_engineering():
     print(fi_df)
 
     #PCA random forest
-    pca = PCA(n_components=len(FEATURES_NUM)-1)
+    pca = PCA(n_components=len(FEATURES_NUM)-2)
     X_train_pca = pca.fit_transform(X_train_num_scaled)
     X_test_pca = pca.transform(X_test_num_scaled)
     X_train_pca_full = np.hstack([X_train_pca, X_train_cat])
@@ -1565,6 +1612,6 @@ def clustering():
     df.to_csv("post-cluster.csv", index=False)
 
 if __name__ == '__main__':
-    data_cleaning()
-    clustering()
-    #feature_engineering()
+    #data_cleaning()
+    #clustering()
+    feature_engineering()
