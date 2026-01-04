@@ -194,7 +194,7 @@ def add_bets(df):
     # This is often more successful in tennis data.
     merged = pd.merge(
         df,
-        df_bet[['bet_match_date', 'winner_std_name', 'loser_std_name', 'B365W', 'B365L']],
+        df_bet[['bet_match_date', 'winner_std_name', 'loser_std_name', 'B365W', 'B365L', 'Comment']],
         left_on=['winner_name', 'loser_name'],
         right_on=['winner_std_name', 'loser_std_name'],
         how='left'
@@ -253,10 +253,11 @@ def create_rank_order_features(df, seed = 42):
             "surface": row["surface"],
             "match_num": row["match_num"],
             "minutes": row["minutes"],
-            "clean_score": row["clean_score"],
+            "score": row["score"],
             "bookie_margin": row.get("bookie_margin", np.nan),
             "bet_match_date": row["bet_match_date"],
             "upset": row["upset"],
+            "comment": row["Comment"],
         }
         if val:
             new_row.update({
@@ -293,7 +294,7 @@ def create_rank_order_features(df, seed = 42):
                 "playerB_bpFaced": row["l_bpFaced"],
                 "playerB_odds": row.get("B365L", np.nan),
                 "playerB_market_prob": row.get("prob_loser_market", np.nan),
-                "log_target": 1,
+                "binary_target": 1,
                 "game_diff": row.get("game_diff", 0)
             })
 
@@ -332,7 +333,7 @@ def create_rank_order_features(df, seed = 42):
                 "playerB_bpFaced": row["w_bpFaced"],
                 "playerB_odds": row.get("B365W", np.nan),
                 "playerB_market_prob": row.get("prob_winner_market", np.nan),
-                "log_target": 0,
+                "binary_target": 0,
                 "game_diff": -row.get("game_diff", 0)
 
             })
@@ -347,6 +348,11 @@ def create_rank_order_features(df, seed = 42):
     return df_new
 
 def clean_score_fields(df):
+    # Remove matches with retirement in score
+    df = df[~df["score"].str.contains("RET", na=False)]
+
+    # Keep only completed matches
+    df = df[df["comment"] == "Completed"]
 
     def clean_score(s):
         if pd.isna(s): return ""
@@ -399,7 +405,7 @@ def compute_elo_features(df):
     for idx, row in df.iterrows():
 
         a, b, surf = row["playerA_id"], row["playerB_id"], row["surface"]
-        outcome = row["log_target"]
+        outcome = row["binary_target"]
 
         playerA_global, playerB_global = global_elo[a], global_elo[b]
 
@@ -520,8 +526,8 @@ def compute_fatigue(df):
         df.at[idx, 'pB_fatigue_load'] = calculate_decayed_load(pB, curr_date)
 
         # Update history (Assuming 'label' is 1 if playerA won)
-        history[pA].append((curr_date, row["minutes"], row["log_target"]))
-        history[pB].append((curr_date, row["minutes"], 1 - row["log_target"]))
+        history[pA].append((curr_date, row["minutes"], row["binary_target"]))
+        history[pB].append((curr_date, row["minutes"], 1 - row["binary_target"]))
 
     df['fatigue_load_diff'] = df['pA_fatigue_load'] - df['pB_fatigue_load']
 
@@ -581,8 +587,8 @@ def compute_fatigue_sensitivity(df):
 
         # --- UPDATE PLAYER HISTORIES AFTER CALCULATION (No Leakage) ---
         # Residual captures if they played better (pos) or worse (neg) than odds
-        resA = row['log_target'] - row['playerA_market_prob']
-        resB = (1 - row['log_target']) - (row['playerB_market_prob'])
+        resA = row['binary_target'] - row['playerA_market_prob']
+        resB = (1 - row['binary_target']) - (row['playerB_market_prob'])
 
         player_histories[pA].append([loadA, resA, date])
         player_histories[pB].append([loadB, resB, date])
@@ -609,8 +615,8 @@ def compute_age_features(df):
 
     # 4. Age Interaction with Fatigue
     # Older players (Age > 32) are more impacted by 10-day fatigue
-    df["pA_age_fatigue"] = df["playerA_age"] * df["fatigue_10d_diff"]
-    df["pB_age_fatigue"] = df["playerB_age"] * df["fatigue_10d_diff"]
+    df["pA_age_fatigue"] = df["playerA_age"] * df["pA_fatigue_load"]
+    df["pB_age_fatigue"] = df["playerB_age"] * df["pB_fatigue_load"]
     df["age_fatigue_diff"] = df["pA_age_fatigue"] - df["pB_age_fatigue"]
 
     return df
@@ -670,9 +676,9 @@ def compute_rolling_h2h(df, window=10, alpha=1):
 
         # 4. UPDATE HISTORY
         # Determine if the winner was the 'min_id' player
-        # (Assuming log_target == 1 means Player A won)
-        winner_is_min = (row["log_target"] == 1 and a_id == p_min) or \
-                        (row["log_target"] == 0 and b_id == p_min)
+        # (Assuming binary_target == 1 means Player A won)
+        winner_is_min = (row["binary_target"] == 1 and a_id == p_min) or \
+                        (row["binary_target"] == 0 and b_id == p_min)
 
         h2h_dict[key].append(1 if winner_is_min else 0)
 
@@ -844,8 +850,8 @@ def compute_tournament_history(df, alpha=2):
         playerB_tourney_win_pct.append(b_pct)
 
         # --- POST-MATCH UPDATE ---
-        # Check who won (assuming log_target=1 means Player A won)
-        if row.log_target == 1:
+        # Check who won (assuming binary_target=1 means Player A won)
+        if row.binary_target == 1:
             tourney_hist[(pA, t_name)][0] += 1  # A wins
         else:
             tourney_hist[(pB, t_name)][0] += 1  # B wins
@@ -998,400 +1004,6 @@ def compute_missing_odds(df):
     df['bookie_margin'] = df['bookie_margin'].fillna(avg_margin)
 
     return df
-
-def data_cleaning():
-
-    #Basic data cleaning
-    df = load_raw_data()
-    df = clean_basic_fields(df)
-    df = clean_score_fields(df)
-    df = add_bets(df)
-    df = create_rank_order_features(df)
-    df = compute_dates(df)
-    df = compute_missing_odds(df)
-    df = compute_fatigue(df)
-    #Performance features
-
-    df = compute_elo_features(df)
-    df = compute_fatigue_sensitivity(df)
-    #df = compute_age_features(df)
-    #df  = compute_height_features(df)
-    #df = compute_service_stats(df)
-    #df = compute_rolling_h2h(df)
-    #df = compute_tournament_history(df)
-    #df = compute_elo_velocity(df)
-    #df = compute_dominance_ratio(df)
-    df.to_csv("data_cleaned_shuffled.csv", index=False)
-
-    return df
-
-def feature_engineering():
-    # ---------------------------------------
-    # 1. Load dataset
-    # ---------------------------------------
-    df = pd.read_csv("data_cleaned_shuffled.csv")
-
-    df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
-    df = df.iloc[10000:].reset_index(drop=True)  # warm-up drop
-    df = df[df["is_imputed_odds"] == 0]
-
-    # ---------------------------------------
-    # 2. Select features
-    # ---------------------------------------
-
-    FEATURES_NUM = [
-        "playerA_market_prob",
-        "bookie_margin",
-        "pA_fatigue_load",
-        "pB_fatigue_load",
-        "fatigue_load_diff",
-        "pA_fatigue_tax",
-        "pB_fatigue_tax",
-        "fatigue_tax_diff",
-        "playerA_surface_elo",
-        "playerB_surface_elo",
-        "surface_elo_diff",
-    ]
-
-    FEATURES_CAT = []
-    LOG_TARGET = "log_target"
-    LIN_TARGET = df["playerA_points_won_pct"]
-    LIN_TARGET2 = df["minutes"]
-
-    X = df[FEATURES_NUM + FEATURES_CAT].copy()
-    y = df[LOG_TARGET].copy()
-
-    print("Selected feature matrix shape:", X.shape)
-
-    # ---------------------------------------
-    # 3. Handle Outliers (IQR Winsorization)
-    # ---------------------------------------
-    # IQR_cap = ["surface_elo_diff",
-    #     "global_elo_diff",
-    #     "fatigue_10d_diff",
-    #     "year_fatigue_diff",
-    #     "prime_age_diff",
-    #     "raw_age_diff",
-    #     "prime_height_diff",
-    #            "raw_age_diff_sq",
-    #            "age_fatigue_diff",
-    #                    ]
-
-    IQR_cap = [
-
-               ]
-    for col in IQR_cap:
-        Q1, Q3 = X[col].quantile([0.25, 0.75])
-        IQR = Q3 - Q1
-        lower = Q1 - 1.5 * IQR
-        upper = Q3 + 1.5 * IQR
-        X[col] = X[col].clip(lower, upper)
-
-    print("Finished outlier winsorization.")
-
-    X_export = X.copy()
-    y_export = y.copy()
-
-    phaseII = X_export.copy()
-    phaseII[LOG_TARGET] = y_export
-    phaseII["playerA_points_won_pct"] = LIN_TARGET
-    phaseII["minutes"] = LIN_TARGET2
-
-    phaseII.to_csv("phaseII.csv", index=False)
-    print("Exported dataset ready for phaseII.")
-
-    #Split the data
-    cutoff = int(len(X) * 0.8)
-    X_train_raw, X_test_raw = X[:cutoff], X[cutoff:]
-    y_train, y_test = y[:cutoff], y[cutoff:]
-
-    print("Train/Test Split Complete:")
-    print(f"X_train_raw shape: {X_train_raw.shape}, X_test_raw shape: {X_test_raw.shape}")
-
-    scaler = StandardScaler()
-
-    # FIT the scaler ONLY on the training data
-    X_train_num_scaled = scaler.fit_transform(X_train_raw[FEATURES_NUM])
-    # TRANSFORM the test data using the TR AINING fit
-    X_test_num_scaled = scaler.transform(X_test_raw[FEATURES_NUM])
-
-    #Encoder
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore", drop='first')
-
-    # FIT the encoder ONLY on the training data
-    X_train_cat = encoder.fit_transform(X_train_raw[FEATURES_CAT])
-    # TRANSFORM the test data using the TRAINING fit
-    X_test_cat = encoder.transform(X_test_raw[FEATURES_CAT])
-
-    # Get feature names for final list
-    cat_feature_names = encoder.get_feature_names_out(FEATURES_CAT)
-
-    # ---------------------------------------
-    # 4. Combine into final feature matrices
-    # ---------------------------------------
-    # Stack the scaled numerical features and the encoded categorical features
-    X_train = np.hstack([X_train_num_scaled, X_train_cat])
-    X_test = np.hstack([X_test_num_scaled, X_test_cat])
-
-    # Create the full list of feature names
-    full_feature_list = FEATURES_NUM + list(cat_feature_names)
-
-    print("\nFinal Processed Data Shapes:")
-    print(f"X_train shape: {X_train.shape}, X_test shape: {X_test.shape}")
-    print(f"Total features: {len(full_feature_list)}")
-
-
-    # ---------------------------------------
-    # 5a. Singular Value Decomposition (SVD)
-    # ---------------------------------------
-    U, S, VT = np.linalg.svd(X_train_num_scaled, full_matrices=False)
-    print("\nSVD singular values:", S)
-    print("Explained variance ratio by SVD (normalized):", S ** 2 / np.sum(S ** 2))
-
-    # 🚨 NEW: Calculate the Condition Number (Ratio of largest to smallest singular value)
-    if len(S) > 1:
-        # S[0] is the largest, S[-1] is the smallest
-        condition_number = S[0] / S[-1]
-        print(f"\nCondition Number (S_max / S_min): {condition_number:.2f} ⚠️")
-        print("Interpretation: A high value (> 30-100) indicates significant multicollinearity/instability.")
-    else:
-        print("\nCondition Number: Not applicable (only one feature).")
-
-    # # ---------------------------------------
-    # # 5b. Variance Inflation Factor (VIF)
-    # # ---------------------------------------
-    vif_data = pd.DataFrame()
-    vif_data["Feature"] = FEATURES_NUM
-    vif_data["VIF"] = [variance_inflation_factor(X_train_num_scaled, i) for i in range(X_train_num_scaled.shape[1])]
-    print("\nVariance Inflation Factors (VIF):")
-    print(vif_data)
-    #
-    # # ---------------------------------------
-    # # 7. Covariance matrix (UNSTANDARDIZED numerical features)
-    # # ---------------------------------------
-    # # Use X_train_raw[FEATURES_NUM] because this is before scaling
-    cov_matrix = np.cov(X_train_raw[FEATURES_NUM].to_numpy(), rowvar=False)
-
-    print("\nRaw Covariance Matrix (Numerical Features Only):")
-    print(pd.DataFrame(cov_matrix, index=FEATURES_NUM, columns=FEATURES_NUM))
-
-    plt.figure(figsize=(16, 8))
-    sns.heatmap(
-        pd.DataFrame(cov_matrix, index=FEATURES_NUM, columns=FEATURES_NUM),
-        annot=True,
-        fmt=".2f",
-        cmap="coolwarm",
-    )
-    plt.title("Covariance Matrix Heatmap")
-    plt.tight_layout()
-    plt.savefig(f"visuals/covariance_heatmap.png", dpi=300)
-    plt.show()
-    #
-    # # ---------------------------------------
-    # # 8. Pearson correlation matrix
-    # # ---------------------------------------
-    corr_matrix = pd.DataFrame(X_train_num_scaled, columns=FEATURES_NUM).corr()
-    plt.figure(figsize=(16, 8))
-    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
-    plt.title("Pearson Correlation — Numerical Features")
-    plt.tight_layout()
-    plt.show()
-    #
-    # # ---------------------------------------
-    # # 10. PCA (numerical only)
-    # # ---------------------------------------
-    pca = PCA(n_components=len(FEATURES_NUM))
-    X_train_pca = pca.fit_transform(X_train_num_scaled)
-    X_test_pca = pca.transform(X_test_num_scaled)
-    print("\nPCA explained variance ratio:", pca.explained_variance_ratio_)
-    explained_variance_ratio = np.array(pca.explained_variance_ratio_)
-    # Calculate the cumulative explained variance
-    cumulative_variance = np.cumsum(explained_variance_ratio)
-    #
-    # # Create component indices for the x-axis
-    n_components = len(explained_variance_ratio)
-    components = np.arange(1, n_components + 1)
-
-    # Plotting setup
-    sns.set_style("whitegrid")
-    plt.figure(figsize=(10, 6))
-
-    plt.plot(components, cumulative_variance, marker='o', linestyle='-', color='purple')
-
-    # Add 90% target line (you can change 0.90 to 0.95 or another target)
-    target_variance = 0.95
-    n_components_target = np.argmax(cumulative_variance >= target_variance) + 1
-
-    plt.axhline(y=target_variance, color='r', linestyle='--', label=f'{target_variance*100:.0f}% Variance')
-    plt.axvline(x=n_components_target, color='r', linestyle='--')
-    plt.text(n_components_target + 0.5, target_variance - 0.05,
-            f'{n_components_target} Components', color='r', fontsize=12)
-
-    plt.title('Cumulative Explained Variance Plot', fontsize=16)
-    plt.xlabel('Number of Principal Components', fontsize=14)
-    plt.ylabel('Cumulative Explained Variance Ratio', fontsize=14)
-    plt.xticks(components)
-    plt.yticks(np.arange(0, 1.1, 0.1))
-    plt.legend(loc='lower right')
-    plt.grid(True)
-    plt.tight_layout()
-
-    plt.savefig('visuals/your_actual_cumulative_explained_variance_plot.png')
-
-    # ---------------------------------------
-    # 11. LDA (full feature set)
-    # ---------------------------------------
-    lda = LDA(n_components=1)
-    X_train_lda = lda.fit_transform(X_train, y_train)
-    X_test_lda = lda.transform(X_test)
-
-    print("LDA explained variance:", lda.explained_variance_ratio_)
-
-    plt.figure(figsize=(8, 4))
-    plt.hist(X_train_lda[y_train == 1], alpha=.5, label="Player A wins (1)")
-    plt.hist(X_train_lda[y_train == 0], alpha=.5, label="Player B wins (0)")
-    plt.legend()
-    plt.title("LDA projection (LD1)")
-    plt.show()
-
-    # ---------------------------------------
-    # 12. Random Forest classifier
-    # ---------------------------------------
-    rf = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=None,
-        min_samples_split=5,
-        min_samples_leaf=3,
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1,
-        bootstrap=True,
-    )
-
-    rf.fit(X_train, y_train)
-    y_pred = rf.predict(X_test)
-
-    print("\nRandom Forest Accuracy:", accuracy_score(y_test, y_pred))
-    print("\nClassification Report:\n", classification_report(y_test, y_pred))
-
-    # ---------------------------------------
-    # 13. Feature importance
-    # ---------------------------------------
-    importance = rf.feature_importances_
-    fi_df = pd.DataFrame({
-        "Feature": full_feature_list,
-        "Importance": importance
-    }).sort_values("Importance", ascending=False)
-
-    print("\nRandom Forest Feature Importances:")
-    print(fi_df)
-
-    #PCA random forest
-    pca = PCA(n_components=len(FEATURES_NUM)-2)
-    X_train_pca = pca.fit_transform(X_train_num_scaled)
-    X_test_pca = pca.transform(X_test_num_scaled)
-    X_train_pca_full = np.hstack([X_train_pca, X_train_cat])
-    X_test_pca_full = np.hstack([X_test_pca, X_test_cat])
-
-    rf_pca = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=None,
-        min_samples_split=5,
-        min_samples_leaf=3,
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1,
-        bootstrap=True,
-    )
-
-    rf_pca.fit(X_train_pca_full, y_train)
-
-    # --- Step 3: Evaluate the Baseline Model ---
-    y_pred_pca = rf_pca.predict(X_test_pca_full)
-
-    print("\n" + "=" * 50)
-    print("       Random Forest on PCA")
-    print("=" * 50)
-    print(f"PCA Baseline Accuracy: {accuracy_score(y_test, y_pred_pca):.4f}")
-    print("\nClassification Report (PCA Baseline):\n", classification_report(y_test, y_pred_pca))
-
-    # ---------------------------------------
-    # 13. Feature importance
-    # ---------------------------------------
-    pca_feature_names = [f'PC{i + 1}' for i in range(X_train_pca.shape[1])]
-    # The categorical features names are still correct
-    categorical_feature_names = list(cat_feature_names)
-
-    # The new, correct list of 12 features
-    pca_full_feature_list = pca_feature_names + categorical_feature_names
-    importance = rf_pca.feature_importances_
-    fi_df_pca = pd.DataFrame({
-        "Feature": pca_full_feature_list,  # <-- CORRECTED
-        "Importance": importance
-    }).sort_values("Importance", ascending=False)
-
-    print("\nRandom Forest Feature Importances (PCA Components):")
-    print(fi_df_pca)
-
-    # ---------------------------------------
-    # 8. Pearson correlation matrix
-    # ---------------------------------------
-    corr_matrix = pd.DataFrame(X_train_pca, columns=pca_feature_names).corr()
-    plt.figure(figsize=(16, 8))
-    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
-    plt.title("Pearson Correlation — Numerical Features")
-    plt.tight_layout()
-    plt.show()
-    # ---------------------------------------
-
-    # a. Stack all features back together (Training and Testing)
-    # Combine the PCA numerical features and the categorical features
-    X_pca_full = np.vstack([X_train_pca_full, X_test_pca_full])
-
-    # b. Combine all target variables (Training and Testing)
-    y_full = np.concatenate([y_train, y_test])
-
-    # c. Get the list of PCA feature names for the DataFrame
-    pca_feature_names = [f'PC{i + 1}' for i in range(X_train_pca.shape[1])]
-    categorical_feature_names = list(encoder.get_feature_names_out(FEATURES_CAT))
-
-    pca_export_columns = pca_feature_names + categorical_feature_names
-
-    # d. Create the DataFrame
-    df_pca_export = pd.DataFrame(X_pca_full, columns=pca_export_columns)
-
-    # Add target, log target, and other analysis columns
-    df_pca_export[LOG_TARGET] = y_full
-    # These lines are now CORRECT because 'df' was already subsetted and index reset!
-    df_pca_export["playerA_points_won_pct"] = df["playerA_points_won_pct"]
-    df_pca_export["minutes"] = df["minutes"]
-    df_pca_export["playerA"] = df["playerA_name"]
-    df_pca_export["playerB"] = df["playerB_name"]
-    df_pca_export["pseudo_date"] = df["pseudo_date"]  # Changed to tourney_date for consistency
-    # based on your sorting at the top
-
-    # f. Export to CSV
-    df_pca_export.to_csv("phaseII_pca_reduced.csv", index=False)
-
-    print("\nExported PCA-reduced dataset (phaseII_pca_reduced.csv) ready for phase II.")
-
-    X_full = np.vstack([X_train, X_test])
-    y_full = np.concatenate([y_train, y_test])
-
-    df_non_pca_export = pd.DataFrame(
-        X_full,
-        columns=full_feature_list
-    )
-
-    df_non_pca_export[LOG_TARGET] = y_full
-    df_non_pca_export["playerA_points_won_pct"] = df["playerA_points_won_pct"]
-    df_non_pca_export["minutes"] = df["minutes"]
-    df_non_pca_export["playerA"] = df["playerA_name"]
-    df_non_pca_export["playerB"] = df["playerB_name"]
-    df_non_pca_export["pseudo_date"] = df["pseudo_date"]
-
-    df_non_pca_export.to_csv("phaseII_non_pca_classification.csv", index=False)
-    print("✅ Exported NON-PCA classification dataset.")
 
 def clustering():
     df = pd.read_csv("data_cleaned_shuffled.csv")
@@ -1579,8 +1191,8 @@ def clustering():
             # --- 3. UPDATE HISTORY AFTER MATCH (No Leakage) ---
             # Skip update if style is -1 (unclustered)
             if sA != -1 and sB != -1:
-                # Result for A is 'log_target' (1 if A wins, 0 if B wins)
-                res_A = 1 if row.log_target == 1 else 0
+                # Result for A is 'binary_target' (1 if A wins, 0 if B wins)
+                res_A = 1 if row.binary_target == 1 else 0
                 res_B = 1 - res_A
 
                 # Calculate how much they over/under performed the market
@@ -1611,7 +1223,401 @@ def clustering():
 
     df.to_csv("post-cluster.csv", index=False)
 
+def data_cleaning():
+
+    #Basic data cleaning
+    df = load_raw_data()
+    df = clean_basic_fields(df)
+    df = add_bets(df)
+    df = create_rank_order_features(df)
+    df = compute_dates(df)
+    df = compute_fatigue(df)
+    #Performance features (retirements and disqualifications removed first)
+    df = clean_score_fields(df)
+    df = compute_elo_features(df)
+    df = compute_missing_odds(df)
+    df = compute_fatigue_sensitivity(df)
+    df = compute_age_features(df)
+    df  = compute_height_features(df)
+    df = compute_service_stats(df)
+    df = compute_rolling_h2h(df)
+    df = compute_tournament_history(df)
+    df = compute_elo_velocity(df)
+    df = compute_dominance_ratio(df)
+    df.to_csv("data_cleaned_shuffled.csv", index=False)
+
+    return df
+
+def feature_engineering():
+    # ---------------------------------------
+    # 1. Load dataset
+    # ---------------------------------------
+    df = pd.read_csv("post-cluster.csv")
+
+    df = df.sort_values(["pseudo_date", "match_num"]).reset_index(drop=True)
+    #df = df.iloc[20000:].reset_index(drop=True)  # warm-up drop
+    df = df[df["is_imputed_odds"] == 0]
+
+    # ---------------------------------------
+    # 2. Select features
+    # ---------------------------------------
+
+    FEATURES_NUM = [
+        "playerA_market_prob", "bookie_margin",
+        "pA_fatigue_load", "fatigue_load_diff",
+        "pA_fatigue_tax", "fatigue_tax_diff",
+        "playerA_surface_elo", "surface_elo_diff",
+    ]
+
+    FEATURES_CAT = []
+    binary_target = "binary_target"
+    LIN_TARGET = df["playerA_points_won_pct"]
+    LIN_TARGET2 = df["minutes"]
+
+    X = df[FEATURES_NUM + FEATURES_CAT].copy()
+    y = df[binary_target].copy()
+
+    print("Selected feature matrix shape:", X.shape)
+
+    # ---------------------------------------
+    # 3. Handle Outliers (IQR Winsorization)
+    # ---------------------------------------
+    # IQR_cap = ["surface_elo_diff",
+    #     "global_elo_diff",
+    #     "fatigue_10d_diff",
+    #     "year_fatigue_diff",
+    #     "prime_age_diff",
+    #     "raw_age_diff",
+    #     "prime_height_diff",
+    #            "raw_age_diff_sq",
+    #            "age_fatigue_diff",
+    #                    ]
+
+    # Updated list focused on volatility, not skill gaps
+    IQR_cap = [        "pA_fatigue_load", "fatigue_load_diff",
+        "pA_fatigue_tax", "fatigue_tax_diff",
+        "playerA_surface_elo", "surface_elo_diff",
+    ]
+
+    for col in IQR_cap:
+        if col in X.columns:
+            Q1 = X[col].quantile(0.25)
+            Q3 = X[col].quantile(0.75)
+            IQR = Q3 - Q1
+            # Using 3.0 instead of 1.5 is often safer for sports
+            # to catch "errors" but keep "extreme talent"
+            lower = Q1 - 3.0 * IQR
+            upper = Q3 + 3.0 * IQR
+            X[col] = X[col].clip(lower, upper)
+
+    print("Finished outlier winsorization.")
+
+    X_export = X.copy()
+    y_export = y.copy()
+
+    phaseII = X_export.copy()
+    phaseII[binary_target] = y_export
+    phaseII["playerA_points_won_pct"] = LIN_TARGET
+    phaseII["minutes"] = LIN_TARGET2
+
+    phaseII.to_csv("phaseII.csv", index=False)
+    print("Exported dataset ready for phaseII.")
+
+    #Split the data
+    cutoff = int(len(X) * 0.8)
+    X_train_raw, X_test_raw = X[:cutoff], X[cutoff:]
+    y_train, y_test = y[:cutoff], y[cutoff:]
+
+    print("Train/Test Split Complete:")
+    print(f"X_train_raw shape: {X_train_raw.shape}, X_test_raw shape: {X_test_raw.shape}")
+
+    scaler = StandardScaler()
+
+    # FIT the scaler ONLY on the training data
+    X_train_num_scaled = scaler.fit_transform(X_train_raw[FEATURES_NUM])
+    # TRANSFORM the test data using the TR AINING fit
+    X_test_num_scaled = scaler.transform(X_test_raw[FEATURES_NUM])
+
+    #Encoder
+    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore", drop='first')
+
+    # FIT the encoder ONLY on the training data
+    X_train_cat = encoder.fit_transform(X_train_raw[FEATURES_CAT])
+    # TRANSFORM the test data using the TRAINING fit
+    X_test_cat = encoder.transform(X_test_raw[FEATURES_CAT])
+
+    # Get feature names for final list
+    cat_feature_names = encoder.get_feature_names_out(FEATURES_CAT)
+
+    # ---------------------------------------
+    # 4. Combine into final feature matrices
+    # ---------------------------------------
+    # Stack the scaled numerical features and the encoded categorical features
+    X_train = np.hstack([X_train_num_scaled, X_train_cat])
+    X_test = np.hstack([X_test_num_scaled, X_test_cat])
+
+    # Create the full list of feature names
+    full_feature_list = FEATURES_NUM + list(cat_feature_names)
+
+    print("\nFinal Processed Data Shapes:")
+    print(f"X_train shape: {X_train.shape}, X_test shape: {X_test.shape}")
+    print(f"Total features: {len(full_feature_list)}")
+
+    # ---------------------------------------
+    # 5a. Singular Value Decomposition (SVD)
+    # ---------------------------------------
+    U, S, VT = np.linalg.svd(X_train_num_scaled, full_matrices=False)
+    print("\nSVD singular values:", S)
+    print("Explained variance ratio by SVD (normalized):", S ** 2 / np.sum(S ** 2))
+
+    if len(S) > 1:
+        # S[0] is the largest, S[-1] is the smallest
+        condition_number = S[0] / S[-1]
+        print(f"\nCondition Number (S_max / S_min): {condition_number:.2f} ⚠️")
+        print("Interpretation: A high value (> 30-100) indicates significant multicollinearity/instability.")
+    else:
+        print("\nCondition Number: Not applicable (only one feature).")
+
+    # # ---------------------------------------
+    # # 5b. Variance Inflation Factor (VIF)
+    # # ---------------------------------------
+    vif_data = pd.DataFrame()
+    vif_data["Feature"] = FEATURES_NUM
+    vif_data["VIF"] = [variance_inflation_factor(X_train_num_scaled, i) for i in range(X_train_num_scaled.shape[1])]
+    print("\nVariance Inflation Factors (VIF):")
+    print(vif_data)
+    #
+    # # ---------------------------------------
+    # # 7. Covariance matrix (UNSTANDARDIZED numerical features)
+    # # ---------------------------------------
+    # # Use X_train_raw[FEATURES_NUM] because this is before scaling
+    cov_matrix = np.cov(X_train_raw[FEATURES_NUM].to_numpy(), rowvar=False)
+
+    print("\nRaw Covariance Matrix (Numerical Features Only):")
+    print(pd.DataFrame(cov_matrix, index=FEATURES_NUM, columns=FEATURES_NUM))
+
+    plt.figure(figsize=(16, 8))
+    sns.heatmap(
+        pd.DataFrame(cov_matrix, index=FEATURES_NUM, columns=FEATURES_NUM),
+        annot=True,
+        fmt=".2f",
+        cmap="coolwarm",
+    )
+    plt.title("Covariance Matrix Heatmap")
+    plt.tight_layout()
+    plt.savefig(f"visuals/covariance_heatmap.png", dpi=300)
+    plt.show()
+    #
+    # # ---------------------------------------
+    # # 8. Pearson correlation matrix
+    # # ---------------------------------------
+    corr_matrix = pd.DataFrame(X_train_num_scaled, columns=FEATURES_NUM).corr()
+    plt.figure(figsize=(16, 8))
+    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
+    plt.title("Pearson Correlation — Numerical Features")
+    plt.tight_layout()
+    plt.show()
+    #
+    # # ---------------------------------------
+    # # 10. PCA (numerical only)
+    # # ---------------------------------------
+    pca = PCA(n_components=len(FEATURES_NUM))
+    X_train_pca = pca.fit_transform(X_train_num_scaled)
+    X_test_pca = pca.transform(X_test_num_scaled)
+    print("\nPCA explained variance ratio:", pca.explained_variance_ratio_)
+    explained_variance_ratio = np.array(pca.explained_variance_ratio_)
+    # Calculate the cumulative explained variance
+    cumulative_variance = np.cumsum(explained_variance_ratio)
+    #
+    # # Create component indices for the x-axis
+    n_components = len(explained_variance_ratio)
+    components = np.arange(1, n_components + 1)
+
+    # Plotting setup
+    sns.set_style("whitegrid")
+    plt.figure(figsize=(10, 6))
+
+    plt.plot(components, cumulative_variance, marker='o', linestyle='-', color='purple')
+
+    # Add 90% target line (you can change 0.90 to 0.95 or another target)
+    target_variance = 0.95
+    n_components_target = np.argmax(cumulative_variance >= target_variance) + 1
+
+    plt.axhline(y=target_variance, color='r', linestyle='--', label=f'{target_variance*100:.0f}% Variance')
+    plt.axvline(x=n_components_target, color='r', linestyle='--')
+    plt.text(n_components_target + 0.5, target_variance - 0.05,
+            f'{n_components_target} Components', color='r', fontsize=12)
+
+    plt.title('Cumulative Explained Variance Plot', fontsize=16)
+    plt.xlabel('Number of Principal Components', fontsize=14)
+    plt.ylabel('Cumulative Explained Variance Ratio', fontsize=14)
+    plt.xticks(components)
+    plt.yticks(np.arange(0, 1.1, 0.1))
+    plt.legend(loc='lower right')
+    plt.grid(True)
+    plt.tight_layout()
+
+    plt.savefig('visuals/your_actual_cumulative_explained_variance_plot.png')
+
+    # ---------------------------------------
+    # 11. LDA (full feature set)
+    # ---------------------------------------
+    lda = LDA(n_components=1)
+    X_train_lda = lda.fit_transform(X_train, y_train)
+    X_test_lda = lda.transform(X_test)
+
+    print("LDA explained variance:", lda.explained_variance_ratio_)
+
+    plt.figure(figsize=(8, 4))
+    plt.hist(X_train_lda[y_train == 1], alpha=.5, label="Player A wins (1)")
+    plt.hist(X_train_lda[y_train == 0], alpha=.5, label="Player B wins (0)")
+    plt.legend()
+    plt.title("LDA projection (LD1)")
+    plt.show()
+
+    # ---------------------------------------
+    # 12. Random Forest classifier
+    # ---------------------------------------
+    rf = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=None,
+        min_samples_split=5,
+        min_samples_leaf=3,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        bootstrap=True,
+    )
+
+    rf.fit(X_train, y_train)
+    y_pred = rf.predict(X_test)
+
+    print("\nRandom Forest Accuracy:", accuracy_score(y_test, y_pred))
+    print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+    # ---------------------------------------
+    # 13. Feature importance
+    # ---------------------------------------
+    importance = rf.feature_importances_
+    fi_df = pd.DataFrame({
+        "Feature": full_feature_list,
+        "Importance": importance
+    }).sort_values("Importance", ascending=False)
+
+    print("\nRandom Forest Feature Importances:")
+    print(fi_df)
+
+    #PCA random forest
+    pca = PCA(n_components=len(FEATURES_NUM))
+    X_train_pca = pca.fit_transform(X_train_num_scaled)
+    X_test_pca = pca.transform(X_test_num_scaled)
+    X_train_pca_full = np.hstack([X_train_pca, X_train_cat])
+    X_test_pca_full = np.hstack([X_test_pca, X_test_cat])
+
+    rf_pca = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=None,
+        min_samples_split=5,
+        min_samples_leaf=3,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        bootstrap=True,
+    )
+
+    rf_pca.fit(X_train_pca_full, y_train)
+
+    # --- Step 3: Evaluate the Baseline Model ---
+    y_pred_pca = rf_pca.predict(X_test_pca_full)
+
+    print("\n" + "=" * 50)
+    print("       Random Forest on PCA")
+    print("=" * 50)
+    print(f"PCA Baseline Accuracy: {accuracy_score(y_test, y_pred_pca):.4f}")
+    print("\nClassification Report (PCA Baseline):\n", classification_report(y_test, y_pred_pca))
+
+    # ---------------------------------------
+    # 13. Feature importance
+    # ---------------------------------------
+    pca_feature_names = [f'PC{i + 1}' for i in range(X_train_pca.shape[1])]
+    # The categorical features names are still correct
+    categorical_feature_names = list(cat_feature_names)
+
+    # The new, correct list of 12 features
+    pca_full_feature_list = pca_feature_names + categorical_feature_names
+    importance = rf_pca.feature_importances_
+    fi_df_pca = pd.DataFrame({
+        "Feature": pca_full_feature_list,  # <-- CORRECTED
+        "Importance": importance
+    }).sort_values("Importance", ascending=False)
+
+    print("\nRandom Forest Feature Importances (PCA Components):")
+    print(fi_df_pca)
+
+    # ---------------------------------------
+    # 8. Pearson correlation matrix
+    # ---------------------------------------
+    corr_matrix = pd.DataFrame(X_train_pca, columns=pca_feature_names).corr()
+    plt.figure(figsize=(16, 8))
+    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f")
+    plt.title("Pearson Correlation — Numerical Features")
+    plt.tight_layout()
+    plt.show()
+    # ---------------------------------------
+
+    # a. Stack all features back together (Training and Testing)
+    # Combine the PCA numerical features and the categorical features
+    X_pca_full = np.vstack([X_train_pca_full, X_test_pca_full])
+
+    # b. Combine all target variables (Training and Testing)
+    y_full = np.concatenate([y_train, y_test])
+
+    # c. Get the list of PCA feature names for the DataFrame
+    pca_feature_names = [f'PC{i + 1}' for i in range(X_train_pca.shape[1])]
+    categorical_feature_names = list(encoder.get_feature_names_out(FEATURES_CAT))
+
+    pca_export_columns = pca_feature_names + categorical_feature_names
+
+    # d. Create the DataFrame
+    df_pca_export = pd.DataFrame(X_pca_full, columns=pca_export_columns)
+
+    # Add target, log target, and other analysis columns
+    df_pca_export[binary_target] = y_full
+    # These lines are now CORRECT because 'df' was already subsetted and index reset!
+    df_pca_export["playerA_points_won_pct"] = df["playerA_points_won_pct"]
+    df_pca_export["minutes"] = df["minutes"]
+    df_pca_export["playerA"] = df["playerA_name"]
+    df_pca_export["playerB"] = df["playerB_name"]
+    df_pca_export["pseudo_date"] = df["pseudo_date"]  # Changed to tourney_date for consistency
+    # based on your sorting at the top
+
+    # f. Export to CSV
+    df_pca_export.to_csv("phaseII_pca_reduced.csv", index=False)
+
+    print("\nExported PCA-reduced dataset (phaseII_pca_reduced.csv) ready for phase II.")
+
+    X_full = np.vstack([X_train, X_test])
+    y_full = np.concatenate([y_train, y_test])
+
+    df_non_pca_export = pd.DataFrame(
+        X_full,
+        columns=full_feature_list
+    )
+
+    df_non_pca_export[binary_target] = y_full
+    df_non_pca_export["playerA_points_won_pct"] = df["playerA_points_won_pct"]
+    df_non_pca_export["minutes"] = df["minutes"]
+    df_non_pca_export["playerA"] = df["playerA_name"]
+    df_non_pca_export["playerB"] = df["playerB_name"]
+    df_non_pca_export["pseudo_date"] = df["pseudo_date"]
+    df_non_pca_export["playerA_odds"] = df["playerA_odds"]
+    df_non_pca_export["playerB_odds"] = df["playerB_odds"]
+
+
+    df_non_pca_export.to_csv("phaseII_non_pca_classification.csv", index=False)
+    print("✅ Exported NON-PCA classification dataset.")
+
 if __name__ == '__main__':
-    #data_cleaning()
-    #clustering()
+    data_cleaning()
+    clustering()
     feature_engineering()

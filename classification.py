@@ -1,13 +1,16 @@
 import pandas as pd
 import numpy as np
 import seaborn as sns
+import matplotlib
+matplotlib.use('Agg')  # Force non-interactive backend
 import matplotlib.pyplot as plt
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score, RandomizedSearchCV, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score, RandomizedSearchCV, StratifiedKFold, \
+    TimeSeriesSplit
 from sklearn.metrics import (
     confusion_matrix,
     accuracy_score,
@@ -24,45 +27,273 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier, plot_tree
+import lightgbm as lgb
+from sklearn.ensemble import StackingClassifier
 
 
-def load_and_prepare_data(file_path="phaseII_pca_reduced.csv"):
-
+def load_and_prepare_data(file_path="phaseII_non_pca_classification.csv"):
     df = pd.read_csv(file_path)
 
-    FEATURES_ALL = [
-        "PC1",
-        "PC2",
-        "PC3",
-        "PC4",
-        "PC5",
-        "PC6",
-        "PC7",
-        "PC8",
-    ]
-    TARGET = "log_target"
+    # These are columns we don't want as features (Targets and Info)
+    NON_FEATURE_COLS = ["binary_target", "playerA_points_won_pct", "minutes", "playerA", "playerB", "pseudo_date", "playerA_odds", "playerB_odds"]
 
-    # 1. Select features
-    # Features are already scaled and encoded from Phase I pipeline
+    # Select every column that IS a feature
+    FEATURES_ALL = [col for col in df.columns if col not in NON_FEATURE_COLS]
+
+    # CRITICAL: Ensure data is sorted by date before splitting
+    # df = df.sort_values('pseudo_date').reset_index(drop=True)
+
+    TARGET = "binary_target"
+
     X = df[FEATURES_ALL].copy()
     Y = df[TARGET].copy()
 
-    # 2. Split the data
+    # Manual Chronological Split (No Shuffling)
     cutoff = int(len(X) * 0.8)
-    x_train, x_test = X[:cutoff], X[cutoff:]  # Use final names directly
+    x_train, x_test = X[:cutoff], X[cutoff:]
     y_train, y_test = Y[:cutoff], Y[cutoff:]
 
-    print("Train/Test Split Complete:")
-    print(f"x_train shape: {x_train.shape}, x_test shape: {x_test.shape}")
+    return x_train.values, x_test.values, y_train, y_test, FEATURES_ALL
 
-    full_feature_list = FEATURES_ALL
+def run_naive_bayes(x_train, x_test, y_train, y_test, feature_names):
 
-    print("\nFinal Processed Data Shapes:")
-    print(f"x_train shape: {x_train.shape}, x_test shape: {x_test.shape}")
-    print(f"Total features: {len(full_feature_list)}")
+    # Define filenames for saving plots
+    classifier_name = "Naive_Bayes"
+    cm_filename = f"visuals/{classifier_name}_Confusion_Matrix.png"
+    roc_filename = f"visuals/{classifier_name}_ROC_Curve.png"
 
-    return x_train.values, x_test.values, y_train, y_test, full_feature_list
+    # ---------------------------------------
+    # 1. K-fold
+    # ---------------------------------------
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    gnb_clf = GaussianNB()
 
+    # The 'var_smoothing' parameter is the most common hyperparameter for GNB.
+    # It adds a small value to the variances to ensure stability (prevent division by zero).
+    param_grid = {
+        'var_smoothing': np.logspace(0, -9, num=100)  # Search a wide range (100 values)
+    }
+
+    # ---------------------------------------
+    # 2. grid search
+    # ---------------------------------------
+    print("Starting Naïve Bayes Grid Search...")
+    start_time = time.time()
+
+    grid_search = GridSearchCV(
+        estimator=gnb_clf,
+        param_grid=param_grid,
+        scoring='accuracy',
+        cv=cv,
+        n_jobs=-1,
+    )
+
+    grid_search.fit(x_train, y_train)
+    end_time = time.time()
+
+    best_model = grid_search.best_estimator_
+
+    print(f"\nNaïve Bayes Grid Search finished in {end_time - start_time:.2f} seconds. ⏱️")
+    print(f"Best Parameters: {grid_search.best_params_}")
+    print(f"Best CV Score (Accuracy): {grid_search.best_score_:.4f}")
+
+    y_pred = best_model.predict(x_test)
+
+    # Get probabilities for ROC curve (Probability of Class 1)
+    y_prob = best_model.predict_proba(x_test)[:, 1]
+
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+
+    # Standard Metrics
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)  # Sensitivity
+    f1 = f1_score(y_test, y_pred)
+
+
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+
+
+    fpr, tpr, thresholds = roc_curve(y_test, y_prob)
+    roc_auc = auc(fpr, tpr)
+
+    # Print Text Report
+    print("\n--- Naïve Bayes Performance Metrics (Optimized Model) ---")
+    print(f"Test Set Accuracy: {accuracy:.4f}")
+    print(f"Precision:   {precision:.4f}")
+    print(f"Sensitivity: {recall:.4f} (Recall)")
+    print(f"Specificity: {specificity:.4f}")
+    print(f"F-Score:     {f1:.4f}")
+    print(f"AUC:         {roc_auc:.4f}")
+    print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+    # ---------------------------------------
+    # 4. Visuals for model
+    # ---------------------------------------
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Confusion Matrix
+    cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=best_model.classes_)
+    cm_display.plot(ax=axes[0], cmap='Oranges')
+    axes[0].set_title("Optimized Naïve Bayes Confusion Matrix")
+
+    # Save Confusion Matrix
+    cm_display.figure_.savefig(cm_filename, bbox_inches='tight')
+    print(f"Saved Confusion Matrix to: {cm_filename}")
+
+    # Plot 2: ROC Curve
+    axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
+    axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    axes[1].set_xlim([0.0, 1.0])
+    axes[1].set_ylim([0.0, 1.05])
+    axes[1].set_xlabel('False Positive Rate (1 - Specificity)')
+    axes[1].set_ylabel('True Positive Rate (Sensitivity)')
+    axes[1].set_title('ROC Curve')
+    axes[1].legend(loc="lower right")
+
+    plt.tight_layout()
+    # Save ROC Curve
+    plt.savefig(roc_filename, bbox_inches='tight')
+    print(f"Saved ROC Curve to: {roc_filename}")
+    #plt.show()
+
+    # ---------------------------------------
+    # 5. Return Data for Comparison Table
+    # ---------------------------------------
+    return {
+        "Classifier": "Naïve Bayes",
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall (Sensitivity)": recall,
+        "Specificity": specificity,
+        "F-Score": f1,
+        "AUC": roc_auc,
+        "Best Params": grid_search.best_params_,
+        "Best Model": best_model,
+    }
+
+def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
+
+    # Define filenames for saving plots
+    classifier_name = "Random_Forest"
+    output_filename = f"visuals/{classifier_name}_Visuals.png"
+
+    # ---------------------------------------
+    # 1. Setup Stratified K-Fold & Hyperparams
+    # ---------------------------------------
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    rf_clf = RandomForestClassifier(random_state=42)
+
+    # Define the Hyperparameter Grid for Randomized Search
+    param_grid = {
+        'n_estimators': [100, 200, 300, 500],  # Number of trees in the forest
+        'max_features': ['sqrt', 'log2'],  # Number of features to consider for best split
+        'max_depth': [10, 20, 30, None],  # Maximum number of levels in tree
+        'min_samples_split': [2, 5, 10],  # Minimum number of samples required to split a node
+        'min_samples_leaf': [1, 2, 4],  # Minimum number of samples required at a leaf node
+        'criterion': ['gini', 'entropy']
+    }
+
+    # ---------------------------------------
+    # 2. Perform Randomized Search (for Efficiency)
+    # ---------------------------------------
+    print("Starting Random Forest Randomized Search...")
+    start_time = time.time()
+
+    random_search = RandomizedSearchCV(
+        estimator=rf_clf,
+        param_distributions=param_grid,
+        n_iter=50,  # Test 50 random combinations
+        scoring='accuracy',
+        cv=cv,
+        n_jobs=-1,
+        verbose=1,
+        random_state=42
+    )
+
+    random_search.fit(x_train, y_train)
+    end_time = time.time()
+
+    best_model = random_search.best_estimator_
+
+    print(f"\nRandom Forest Randomized Search finished in {end_time - start_time:.2f} seconds. ⏱️")
+    print(f"Best Parameters: {random_search.best_params_}")
+    print(f"Best CV Score (Accuracy): {random_search.best_score_:.4f}")
+
+
+    # 3. Final Predictions and Metrics, hope its good
+
+    y_pred = best_model.predict(x_test)
+    y_prob = best_model.predict_proba(x_test)[:, 1]
+
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+
+    # Standard Metrics
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)  # Sensitivity, interchangeable I think
+    f1 = f1_score(y_test, y_pred)
+
+    # Specificity Calculation: TN / (TN + FP)
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+
+    # ROC / AUC
+    fpr, tpr, thresholds = roc_curve(y_test, y_prob)
+    roc_auc = auc(fpr, tpr)
+
+    # Print Text Report
+    print("\n--- Random Forest Performance Metrics (Optimized Model) ---")
+    print(f"Test Set Accuracy: {accuracy:.4f}")
+    print(f"Precision:   {precision:.4f}")
+    print(f"Sensitivity: {recall:.4f} (Recall)")
+    print(f"Specificity: {specificity:.4f}")
+    print(f"F-Score:     {f1:.4f}")
+    print(f"AUC:         {roc_auc:.4f}")
+    print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+    # 4. Create visuals, must be good for report, needed
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Confusion Matrix
+    cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=best_model.classes_)
+    cm_display.plot(ax=axes[0], cmap='YlGnBu')
+    axes[0].set_title("Random Forest Confusion Matrix")
+
+    # Plot 2: ROC Curve
+    axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
+    axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    axes[1].set_xlim([0.0, 1.0])
+    axes[1].set_ylim([0.0, 1.05])
+    axes[1].set_xlabel('False Positive Rate (1 - Specificity)')
+    axes[1].set_ylabel('True Positive Rate (Sensitivity)')
+    axes[1].set_title('ROC Curve')
+    axes[1].legend(loc="lower right")
+
+    plt.tight_layout()
+
+    plt.savefig(output_filename)
+    print(f"Saved Confusion Matrix and ROC Curve to: {output_filename}")
+
+
+    # ---------------------------------------
+    # 5. Return Data for Comparison Table
+    # ---------------------------------------
+    return {
+        "Classifier": "Random Forest (Bagging)",
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall (Sensitivity)": recall,
+        "Specificity": specificity,
+        "F-Score": f1,
+        "AUC": roc_auc,
+        "Best Params": random_search.best_params_,
+
+        "Best Model": best_model
+    }
 
 def run_lda(x_train, x_test, y_train, y_test, feature_names):
 
@@ -946,50 +1177,41 @@ def run_svm(x_train, x_test, y_train, y_test, feature_names):
     }
 
 def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
-
     # Define filenames for saving plots
     classifier_name = "MLP_Neural_Network"
     output_filename = f"visuals/{classifier_name}_Visuals.png"
 
     # ---------------------------------------
-    # 1. Setup Stratified K-Fold & Hyperparams
+    # 1. Setup TimeSeriesSplit & Hyperparams
     # ---------------------------------------
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # TimeSeriesSplit ensures the model is validated on "future" data in every fold.
+    cv = TimeSeriesSplit(n_splits=5)
 
-    # max_iter is often increased for MLPs; setting it to 500 gives time to converge.
-    mlp_clf = MLPClassifier(max_iter=500, random_state=42)
+    # early_stopping=True is useful for preventing the MLP from overfitting to old eras
+    mlp_clf = MLPClassifier(max_iter=1000, random_state=42, early_stopping=True)
 
-    # Define the Hyperparameter Grid for Randomized Search
+    # Define the Hyperparameter Grid
+    # I've slightly adjusted alpha and hidden layers to be more "modern-era" appropriate
     param_grid = {
-        # Architecture: Testing different sizes (small, medium, large)
-        'hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)],
-
-        # Non-linear activation functions
-        'activation': ['tanh', 'relu'],
-
-        # Regularization (L2 penalty) - alpha is regularization strength
-        'alpha': np.logspace(-5, -1, 5),  # [0.00001, 0.0001, 0.001, 0.01, 0.1]
-
-        # Solver for weight optimization
-        'solver': ['adam'],  # 'adam' is generally faster and highly effective
-
-        # Learning rate
-        'learning_rate_init': [0.001, 0.01]
+        'hidden_layer_sizes': [(50,), (100,), (50, 50), (32, 32, 32)],
+        'activation': ['relu', 'tanh'],
+        'alpha': [0.0001, 0.001, 0.01, 0.1], # Regularization strength
+        'solver': ['adam'],
+        'learning_rate_init': [0.001, 0.005]
     }
 
     # ---------------------------------------
-    # 2. switching to a Randomized Search (Faster)
+    # 2. Randomized Search (Time Series Aware)
     # ---------------------------------------
-    print("Starting MLP Neural Network Randomized Search...")
+    print(f"Starting {classifier_name} Randomized Search with TimeSeriesSplit...")
     start_time = time.time()
 
-    # Use RandomizedSearchCV due to the large search space
     random_search = RandomizedSearchCV(
         estimator=mlp_clf,
         param_distributions=param_grid,
-        n_iter=50,  # Test 50 random combinations for efficiency
+        n_iter=30, # Reduced for speed, as MLP can be slow
         scoring='accuracy',
-        cv=cv,
+        cv=cv, # Using TimeSeriesSplit
         n_jobs=-1,
         verbose=1,
         random_state=42
@@ -1008,68 +1230,48 @@ def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
     # 3. Final Predictions and Metrics
     # ---------------------------------------
     y_pred = best_model.predict(x_test)
-
-    # Get probabilities for ROC curve (Probability of Class 1)
     y_prob = best_model.predict_proba(x_test)[:, 1]
 
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = cm.ravel()
 
-    # Standard Metrics
     accuracy = accuracy_score(y_test, y_pred)
     precision = precision_score(y_test, y_pred)
-    recall = recall_score(y_test, y_pred)  # Sensitivity
+    recall = recall_score(y_test, y_pred)
     f1 = f1_score(y_test, y_pred)
-
-    # Specificity Calculation: TN / (TN + FP)
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
 
-    # ROC / AUC
     fpr, tpr, thresholds = roc_curve(y_test, y_prob)
     roc_auc = auc(fpr, tpr)
 
-    # Print Text Report
-    print("\n--- MLP Neural Network Performance Metrics (Optimized Model) ---")
+    print(f"\n--- {classifier_name} Performance Metrics (Optimized) ---")
     print(f"Test Set Accuracy: {accuracy:.4f}")
     print(f"Precision:   {precision:.4f}")
     print(f"Sensitivity: {recall:.4f} (Recall)")
     print(f"Specificity: {specificity:.4f}")
     print(f"F-Score:     {f1:.4f}")
     print(f"AUC:         {roc_auc:.4f}")
-    print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
     # ---------------------------------------
-    # 4. Visualizations and Saving Plots
+    # 4. Visualizations
     # ---------------------------------------
-
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Plot 1: Confusion Matrix
     cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=best_model.classes_)
     cm_display.plot(ax=axes[0], cmap='cividis')
-    axes[0].set_title("Optimized MLP Confusion Matrix")
+    axes[0].set_title(f"{classifier_name} CM")
 
-    # Plot 2: ROC Curve
     axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
     axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    axes[1].set_xlim([0.0, 1.0])
-    axes[1].set_ylim([0.0, 1.05])
-    axes[1].set_xlabel('False Positive Rate (1 - Specificity)')
-    axes[1].set_ylabel('True Positive Rate (Sensitivity)')
+    axes[1].set_xlabel('FPR')
+    axes[1].set_ylabel('TPR')
     axes[1].set_title('ROC Curve')
     axes[1].legend(loc="lower right")
 
     plt.tight_layout()
-
     plt.savefig(output_filename)
-    print(f"Saved Confusion Matrix and ROC Curve to: {output_filename}")
 
-
-    # ---------------------------------------
-    # 5. Return Data for Comparison Table
-    # ---------------------------------------
     return {
-        "Classifier": "Multi-Layered Perceptron",
+        "Classifier": classifier_name,
         "Accuracy": accuracy,
         "Precision": precision,
         "Recall (Sensitivity)": recall,
@@ -1077,295 +1279,48 @@ def run_mlp_neural_network(x_train, x_test, y_train, y_test, feature_names):
         "F-Score": f1,
         "AUC": roc_auc,
         "Best Params": random_search.best_params_,
-
-        "Best Model": best_model
-    }
-
-def run_naive_bayes(x_train, x_test, y_train, y_test, feature_names):
-
-    # Define filenames for saving plots
-    classifier_name = "Naive_Bayes"
-    cm_filename = f"visuals/{classifier_name}_Confusion_Matrix.png"
-    roc_filename = f"visuals/{classifier_name}_ROC_Curve.png"
-
-    # ---------------------------------------
-    # 1. K-fold
-    # ---------------------------------------
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    gnb_clf = GaussianNB()
-
-    # The 'var_smoothing' parameter is the most common hyperparameter for GNB.
-    # It adds a small value to the variances to ensure stability (prevent division by zero).
-    param_grid = {
-        'var_smoothing': np.logspace(0, -9, num=100)  # Search a wide range (100 values)
-    }
-
-    # ---------------------------------------
-    # 2. grid search
-    # ---------------------------------------
-    print("Starting Naïve Bayes Grid Search...")
-    start_time = time.time()
-
-    grid_search = GridSearchCV(
-        estimator=gnb_clf,
-        param_grid=param_grid,
-        scoring='accuracy',
-        cv=cv,
-        n_jobs=-1,
-    )
-
-    grid_search.fit(x_train, y_train)
-    end_time = time.time()
-
-    best_model = grid_search.best_estimator_
-
-    print(f"\nNaïve Bayes Grid Search finished in {end_time - start_time:.2f} seconds. ⏱️")
-    print(f"Best Parameters: {grid_search.best_params_}")
-    print(f"Best CV Score (Accuracy): {grid_search.best_score_:.4f}")
-
-    y_pred = best_model.predict(x_test)
-
-    # Get probabilities for ROC curve (Probability of Class 1)
-    y_prob = best_model.predict_proba(x_test)[:, 1]
-
-    cm = confusion_matrix(y_test, y_pred)
-    tn, fp, fn, tp = cm.ravel()
-
-    # Standard Metrics
-    accuracy = accuracy_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred)
-    recall = recall_score(y_test, y_pred)  # Sensitivity
-    f1 = f1_score(y_test, y_pred)
-
-
-    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-
-
-    fpr, tpr, thresholds = roc_curve(y_test, y_prob)
-    roc_auc = auc(fpr, tpr)
-
-    # Print Text Report
-    print("\n--- Naïve Bayes Performance Metrics (Optimized Model) ---")
-    print(f"Test Set Accuracy: {accuracy:.4f}")
-    print(f"Precision:   {precision:.4f}")
-    print(f"Sensitivity: {recall:.4f} (Recall)")
-    print(f"Specificity: {specificity:.4f}")
-    print(f"F-Score:     {f1:.4f}")
-    print(f"AUC:         {roc_auc:.4f}")
-    print("\nClassification Report:\n", classification_report(y_test, y_pred))
-
-    # ---------------------------------------
-    # 4. Visuals for model
-    # ---------------------------------------
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Plot 1: Confusion Matrix
-    cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=best_model.classes_)
-    cm_display.plot(ax=axes[0], cmap='Oranges')
-    axes[0].set_title("Optimized Naïve Bayes Confusion Matrix")
-
-    # Save Confusion Matrix
-    cm_display.figure_.savefig(cm_filename, bbox_inches='tight')
-    print(f"Saved Confusion Matrix to: {cm_filename}")
-
-    # Plot 2: ROC Curve
-    axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
-    axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    axes[1].set_xlim([0.0, 1.0])
-    axes[1].set_ylim([0.0, 1.05])
-    axes[1].set_xlabel('False Positive Rate (1 - Specificity)')
-    axes[1].set_ylabel('True Positive Rate (Sensitivity)')
-    axes[1].set_title('ROC Curve')
-    axes[1].legend(loc="lower right")
-
-    plt.tight_layout()
-    # Save ROC Curve
-    plt.savefig(roc_filename, bbox_inches='tight')
-    print(f"Saved ROC Curve to: {roc_filename}")
-    #plt.show()
-
-    # ---------------------------------------
-    # 5. Return Data for Comparison Table
-    # ---------------------------------------
-    return {
-        "Classifier": "Naïve Bayes",
-        "Accuracy": accuracy,
-        "Precision": precision,
-        "Recall (Sensitivity)": recall,
-        "Specificity": specificity,
-        "F-Score": f1,
-        "AUC": roc_auc,
-        "Best Params": grid_search.best_params_,
         "Best Model": best_model,
-    }
-
-def run_random_forest(x_train, x_test, y_train, y_test, feature_names):
-
-    # Define filenames for saving plots
-    classifier_name = "Random_Forest"
-    output_filename = f"visuals/{classifier_name}_Visuals.png"
-
-    # ---------------------------------------
-    # 1. Setup Stratified K-Fold & Hyperparams
-    # ---------------------------------------
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    rf_clf = RandomForestClassifier(random_state=42)
-
-    # Define the Hyperparameter Grid for Randomized Search
-    param_grid = {
-        'n_estimators': [100, 200, 300, 500],  # Number of trees in the forest
-        'max_features': ['sqrt', 'log2'],  # Number of features to consider for best split
-        'max_depth': [10, 20, 30, None],  # Maximum number of levels in tree
-        'min_samples_split': [2, 5, 10],  # Minimum number of samples required to split a node
-        'min_samples_leaf': [1, 2, 4],  # Minimum number of samples required at a leaf node
-        'criterion': ['gini', 'entropy']
-    }
-
-    # ---------------------------------------
-    # 2. Perform Randomized Search (for Efficiency)
-    # ---------------------------------------
-    print("Starting Random Forest Randomized Search...")
-    start_time = time.time()
-
-    random_search = RandomizedSearchCV(
-        estimator=rf_clf,
-        param_distributions=param_grid,
-        n_iter=50,  # Test 50 random combinations
-        scoring='accuracy',
-        cv=cv,
-        n_jobs=-1,
-        verbose=1,
-        random_state=42
-    )
-
-    random_search.fit(x_train, y_train)
-    end_time = time.time()
-
-    best_model = random_search.best_estimator_
-
-    print(f"\nRandom Forest Randomized Search finished in {end_time - start_time:.2f} seconds. ⏱️")
-    print(f"Best Parameters: {random_search.best_params_}")
-    print(f"Best CV Score (Accuracy): {random_search.best_score_:.4f}")
-
-
-    # 3. Final Predictions and Metrics, hope its good
-
-    y_pred = best_model.predict(x_test)
-    y_prob = best_model.predict_proba(x_test)[:, 1]
-
-    cm = confusion_matrix(y_test, y_pred)
-    tn, fp, fn, tp = cm.ravel()
-
-    # Standard Metrics
-    accuracy = accuracy_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred)
-    recall = recall_score(y_test, y_pred)  # Sensitivity, interchangeable I think
-    f1 = f1_score(y_test, y_pred)
-
-    # Specificity Calculation: TN / (TN + FP)
-    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-
-    # ROC / AUC
-    fpr, tpr, thresholds = roc_curve(y_test, y_prob)
-    roc_auc = auc(fpr, tpr)
-
-    # Print Text Report
-    print("\n--- Random Forest Performance Metrics (Optimized Model) ---")
-    print(f"Test Set Accuracy: {accuracy:.4f}")
-    print(f"Precision:   {precision:.4f}")
-    print(f"Sensitivity: {recall:.4f} (Recall)")
-    print(f"Specificity: {specificity:.4f}")
-    print(f"F-Score:     {f1:.4f}")
-    print(f"AUC:         {roc_auc:.4f}")
-    print("\nClassification Report:\n", classification_report(y_test, y_pred))
-
-    # 4. Create visuals, must be good for report, needed
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Plot 1: Confusion Matrix
-    cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=best_model.classes_)
-    cm_display.plot(ax=axes[0], cmap='YlGnBu')
-    axes[0].set_title("Random Forest Confusion Matrix")
-
-    # Plot 2: ROC Curve
-    axes[1].plot(fpr, tpr, color='darkorange', lw=2, label=f'AUC = {roc_auc:.2f}')
-    axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    axes[1].set_xlim([0.0, 1.0])
-    axes[1].set_ylim([0.0, 1.05])
-    axes[1].set_xlabel('False Positive Rate (1 - Specificity)')
-    axes[1].set_ylabel('True Positive Rate (Sensitivity)')
-    axes[1].set_title('ROC Curve')
-    axes[1].legend(loc="lower right")
-
-    plt.tight_layout()
-
-    plt.savefig(output_filename)
-    print(f"Saved Confusion Matrix and ROC Curve to: {output_filename}")
-
-
-    # ---------------------------------------
-    # 5. Return Data for Comparison Table
-    # ---------------------------------------
-    return {
-        "Classifier": "Random Forest (Bagging)",
-        "Accuracy": accuracy,
-        "Precision": precision,
-        "Recall (Sensitivity)": recall,
-        "Specificity": specificity,
-        "F-Score": f1,
-        "AUC": roc_auc,
-        "Best Params": random_search.best_params_,
-
-        "Best Model": best_model
+        "Probabilities": y_prob,
     }
 
 
 def run_xgboost(x_train, x_test, y_train, y_test, feature_names):
-    """
-    XGBoost Implementation following the exact format of your RF and MLP functions.
-    Optimized for high-variance sports data with specific regularization.
-    """
-
-    # Define filenames for saving plots
     classifier_name = "XGBoost"
     output_filename = f"visuals/{classifier_name}_Visuals.png"
 
-    # ---------------------------------------
-    # 1. Setup Stratified K-Fold & Hyperparams
-    # ---------------------------------------
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # 1. Setup TimeSeriesSplit (The "Walk-Forward" approach)
+    # n_splits=5 means it will train on 1/6th, test on 1/6th; then train on 2/6ths, test on next 1/6th...
+    cv = TimeSeriesSplit(n_splits=5)
 
-    # eval_metric='logloss' avoids warnings in newer XGB versions
     xgb_clf = XGBClassifier(random_state=42, eval_metric='logloss')
 
-    # Hyperparameter Grid:
-    # 'learning_rate': Smaller values (0.01-0.05) help hit the 71% ceiling by being precise.
-    # 'gamma': Regularization parameter that prevents overfitting in tennis data.
-    # 'subsample': Training on 80% of data randomly per tree adds robustness.
+    # Grid remains the same, but 'learning_rate' is more sensitive in time-series
     param_grid = {
+
         'n_estimators': [200, 300, 500],
+
         'learning_rate': [0.01, 0.05, 0.1],
+
         'max_depth': [3, 5, 7, 10],
+
         'min_child_weight': [1, 3, 5],
+
         'gamma': [0, 0.1, 0.2, 0.4],
+
         'subsample': [0.7, 0.8, 0.9],
+
         'colsample_bytree': [0.7, 0.8, 0.9]
+
     }
 
-    # ---------------------------------------
-    # 2. Perform Randomized Search
-    # ---------------------------------------
-    print("Starting XGBoost Randomized Search...")
     start_time = time.time()
-
+    # 2. Perform Randomized Search with TimeSeriesSplit
     random_search = RandomizedSearchCV(
         estimator=xgb_clf,
         param_distributions=param_grid,
-        n_iter=50,
+        n_iter=30, # Reduced iterations to prevent over-tuning on the folds
         scoring='accuracy',
-        cv=cv,
+        cv=cv, # Using TimeSeriesSplit here
         n_jobs=-1,
         verbose=1,
         random_state=42
@@ -1441,7 +1396,170 @@ def run_xgboost(x_train, x_test, y_train, y_test, feature_names):
         "F-Score": f1,
         "AUC": roc_auc,
         "Best Params": random_search.best_params_,
-        "Best Model": best_model
+        "Best Model": best_model,
+        "Probabilities": y_prob,
+    }
+
+# def run_catboost(x_train, x_test, y_train, y_test, feature_names):
+#     classifier_name = "CatBoost"
+#     output_filename = f"visuals/{classifier_name}_Visuals.png"
+#
+#     cv = TimeSeriesSplit(n_splits=5)
+#     # CatBoost is robust to overfitting; border_count helps with numerical feature precision
+#     cb_clf = CatBoostClassifier(random_state=42, logging_level='Silent', eval_metric='Logloss')
+#
+#     param_grid = {
+#         'iterations': [500, 1000],
+#         'learning_rate': [0.01, 0.05, 0.1],
+#         'depth': [4, 6, 8],
+#         'l2_leaf_reg': [3, 5, 7, 9],
+#         'border_count': [32, 64, 128]
+#     }
+#
+#     print(f"Starting {classifier_name} Randomized Search...")
+#     start_time = time.time()
+#     random_search = RandomizedSearchCV(cb_clf, param_grid, n_iter=20, cv=cv, scoring='accuracy', n_jobs=-1, random_state=42)
+#     random_search.fit(x_train, y_train)
+#     end_time = time.time()
+#
+#     best_model = random_search.best_estimator_
+#     y_pred = best_model.predict(x_test)
+#     y_prob = best_model.predict_proba(x_test)[:, 1]
+#
+#     # Metrics
+#     cm = confusion_matrix(y_test, y_pred)
+#     tn, fp, fn, tp = cm.ravel()
+#     accuracy = accuracy_score(y_test, y_pred)
+#     precision = precision_score(y_test, y_pred)
+#     recall = recall_score(y_test, y_pred)
+#     f1 = f1_score(y_test, y_pred)
+#     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+#     fpr, tpr, _ = roc_curve(y_test, y_prob)
+#     roc_auc = auc(fpr, tpr)
+#
+#     # Visualization
+#     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+#     ConfusionMatrixDisplay(cm).plot(ax=axes[0], cmap='viridis')
+#     axes[1].plot(fpr, tpr, label=f'AUC = {roc_auc:.2f}')
+#     axes[1].plot([0,1], [0,1], '--')
+#     plt.savefig(output_filename)
+#
+#     return {
+#         "Classifier": "CatBoost (Symmetric Trees)",
+#         "Accuracy": accuracy, "Precision": precision, "Recall (Sensitivity)": recall,
+#         "Specificity": specificity, "F-Score": f1, "AUC": roc_auc,
+#         "Best Params": random_search.best_params_, "Best Model": best_model
+#     }
+
+def run_lightgbm(x_train, x_test, y_train, y_test, feature_names):
+    classifier_name = "LightGBM"
+    output_filename = f"visuals/{classifier_name}_Visuals.png"
+
+    cv = TimeSeriesSplit(n_splits=5)
+    lgb_clf = lgb.LGBMClassifier(random_state=42, verbosity=-1)
+
+    param_grid = {
+        'n_estimators': [300, 500, 1000],
+        'num_leaves': [15, 31, 63],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'min_child_samples': [20, 50, 100],
+        'reg_alpha': [0, 0.1, 0.5],
+        'reg_lambda': [0, 0.1, 0.5]
+    }
+
+    print(f"Starting {classifier_name} Randomized Search...")
+    start_time = time.time()
+    random_search = RandomizedSearchCV(lgb_clf, param_grid, n_iter=30, cv=cv, scoring='accuracy', n_jobs=-1, random_state=42)
+    random_search.fit(x_train, y_train)
+    end_time = time.time()
+
+    best_model = random_search.best_estimator_
+    y_pred = best_model.predict(x_test)
+    y_prob = best_model.predict_proba(x_test)[:, 1]
+
+    # Metrics
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    fpr, tpr, _ = roc_curve(y_test, y_prob)
+    roc_auc = auc(fpr, tpr)
+
+    # Visualization
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    ConfusionMatrixDisplay(cm).plot(ax=axes[0], cmap='plasma')
+    axes[1].plot(fpr, tpr, label=f'AUC = {roc_auc:.2f}')
+    axes[1].plot([0,1], [0,1], '--')
+    plt.savefig(output_filename)
+
+    return {
+        "Classifier": "LightGBM (Leaf-wise Growth)",
+        "Accuracy": accuracy, "Precision": precision, "Recall (Sensitivity)": recall,
+        "Specificity": specificity, "F-Score": f1, "AUC": roc_auc,
+        "Best Params": random_search.best_params_, "Best Model": best_model
+    }
+
+def run_stacking_ensemble(x_train, x_test, y_train, y_test, base_models_list):
+    classifier_name = "Stacking_Ensemble"
+    output_filename = f"visuals/{classifier_name}_Visuals.png"
+
+    # ✅ Extract already-fitted base models
+    estimators = [
+        (res["Classifier"], res["Best Model"])
+        for res in base_models_list
+    ]
+
+    # Meta-learner
+    stack_clf = StackingClassifier(
+        estimators=estimators,
+        final_estimator=LogisticRegression(max_iter=1000),
+        cv="prefit",     # critical
+        n_jobs=1
+    )
+
+    print(f"Starting {classifier_name} Training...")
+    start_time = time.time()
+    stack_clf.fit(x_train, y_train)
+    end_time = time.time()
+
+    y_pred = stack_clf.predict(x_test)
+    y_prob = stack_clf.predict_proba(x_test)[:, 1]
+
+    # Metrics
+    cm = confusion_matrix(y_test, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+
+    fpr, tpr, _ = roc_curve(y_test, y_prob)
+    roc_auc = auc(fpr, tpr)
+
+    # Visualization
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    ConfusionMatrixDisplay(cm).plot(ax=axes[0], cmap='inferno')
+    axes[1].plot(fpr, tpr, label=f'AUC = {roc_auc:.2f}')
+    axes[1].plot([0, 1], [0, 1], '--')
+    axes[1].legend()
+    plt.savefig(output_filename)
+
+    return {
+        "Classifier": "Stacking Ensemble",
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall (Sensitivity)": recall,
+        "Specificity": specificity,
+        "F-Score": f1,
+        "AUC": roc_auc,
+        "Best Params": "Meta-Learner: Logistic Regression",
+        "Best Model": stack_clf,
+        "Probabilities": y_prob,
     }
 
 def plot_all_roc_curves(models_and_names, X_test, y_test):
@@ -1475,56 +1593,139 @@ def plot_all_roc_curves(models_and_names, X_test, y_test):
     plt.show()
     print("Saved combined ROC curve plot to 'all_models_roc_comparison.png'.")
 
+
+class TennisBettingEvaluator:
+    def __init__(self, test_df, playerA_odds_col='playerA_odds', playerB_odds_col='playerB_odds',
+                 target_col='binary_target'):
+        self.data = test_df.copy()
+        self.odds_A = playerA_odds_col
+        self.odds_B = playerB_odds_col
+        self.target = target_col
+
+    def evaluate_model(self, probabilities, model_name="Model", threshold=0.03):
+        df = self.data.copy()
+        df['pA'] = probabilities
+        df['pB'] = 1 - df['pA']
+
+        results = []
+        for row in df.itertuples():
+            # Expected Value Calculation
+            ev_A = (getattr(row, 'pA') * (getattr(row, self.odds_A) - 1)) - (getattr(row, 'pB'))
+            ev_B = (getattr(row, 'pB') * (getattr(row, self.odds_B) - 1)) - (getattr(row, 'pA'))
+
+            if ev_A > ev_B and ev_A > threshold:
+                # If Player A wins (target=1), profit is Odds - 1. Else, lose 1.
+                profit = (getattr(row, self.odds_A) - 1) if getattr(row, self.target) == 1 else -1
+                action = "Bet A"
+            elif ev_B > ev_A and ev_B > threshold:
+                # If Player B wins (target=0), profit is Odds - 1. Else, lose 1.
+                profit = (getattr(row, self.odds_B) - 1) if getattr(row, self.target) == 0 else -1
+                action = "Bet B"
+            else:
+                profit = 0
+                action = "No Bet"
+
+            results.append({'action': action, 'profit': profit})
+
+        res_df = pd.DataFrame(results)
+        return self._print_stats(res_df, model_name)
+
+    def _print_stats(self, res_df, name):
+        active_bets = res_df[res_df['action'] != 'No Bet'].copy()
+        num_bets = len(active_bets)
+
+        if num_bets == 0:
+            print(f"--- {name}: No bets placed ---")
+            return res_df
+
+        total_profit = active_bets['profit'].sum()
+        total_invested = num_bets
+        roi_pct = (total_profit / total_invested) * 100
+
+        print(f"\n--- {name} Betting Results ---")
+        print(f"Bets Placed: {num_bets}")
+        print(f"Total Profit: {total_profit:.2f} units")
+        print(f"ROI: {roi_pct:.2f}%")
+
+        # --- GRAPHING ---
+        active_bets['cum_profit'] = active_bets['profit'].cumsum()
+        active_bets['running_count'] = range(1, len(active_bets) + 1)
+        active_bets['cum_roi'] = (active_bets['cum_profit'] / active_bets['running_count']) * 100
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(active_bets['running_count'].values, active_bets['cum_roi'].values, color='blue', lw=1.5)
+        plt.axhline(y=0, color='red', linestyle='--')
+        plt.title(f"Cumulative ROI % - {name}")
+        plt.xlabel("Number of Bets")
+        plt.ylabel("ROI %")
+        plt.grid(True, alpha=0.3)
+
+        # Save output
+        graph_filename = f"visuals/{name.replace(' ', '_')}_ROI.png"
+        plt.savefig(graph_filename)
+        print(f"ROI Graph saved to: {graph_filename}")
+        plt.close()
+
+        return res_df
 if __name__ == '__main__':
-    # Load and preprocess
-    xTrain, xTest, yTrain, yTest, feature_names = load_and_prepare_data()
+    # 1. Load and prepare data
+    # Ensure load_and_prepare_data returns the original DF (or slice it here)
+    # If your CSV is phaseII_non_pca_classification.csv, we load it to get odds
+    file_path = "phaseII_non_pca_classification.csv"
+    xTrain, xTest, yTrain, yTest, feature_names = load_and_prepare_data(file_path)
 
-    #post_prune_tree_results = run_post_prune_tree(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("Post-pruned Tree Results: ", post_prune_tree_results)
+    # Get the original test rows to access playerA_odds and playerB_odds
+    full_df = pd.read_csv(file_path)
+    cutoff = int(len(full_df) * 0.8)
+    test_df_with_odds = full_df.iloc[cutoff:].copy().reset_index(drop=True)
 
-    #lda_results = run_lda(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("LDA Results: ", lda_results)
+    # 2. Run individual models
+    model_results = []
+    print("--- Phase 1: Training Base Models ---")
 
-    #log_reg_results = run_logistic_regression(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("Logistic Regression Results: ", log_reg_results)
+    # Run XGBoost
+    xgb_res = run_xgboost(xTrain, xTest, yTrain, yTest, feature_names)
+    model_results.append(xgb_res)
 
-    #decision_tree_results = run_decision_tree(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("Decision Tree Results: ", decision_tree_results)
+    # Run Neural Network (MLP)
+    mlp_res = run_mlp_neural_network(xTrain, xTest, yTrain, yTest, feature_names)
+    model_results.append(mlp_res)
 
-    #pre_pruned_tree_results = run_pre_pruned_tree(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("Pre-pruned Tree Results: ", pre_pruned_tree_results)
+    # 3. Phase 2: Stacking Ensemble
+    print("\n--- Phase 2: Training Stacking Ensemble ---")
+    ensemble_res = run_stacking_ensemble(xTrain, xTest, yTrain, yTest, model_results)
+    model_results.append(ensemble_res)
 
-    xgboost_results = run_xgboost(xTrain, xTest, yTrain, yTest, feature_names)
+    # 4. Phase 3: Generic Betting Evaluation
+    print("\n" + "=" * 50)
+    print("PHASE 3: BETTING STRATEGY EVALUATION")
+    print("=" * 50)
 
-    #knn_results = run_knn(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("KNN Results: ", knn_results)
+    # Initialize the generic evaluator
+    evaluator = TennisBettingEvaluator(
+        test_df_with_odds,
+        playerA_odds_col='playerA_odds',
+        playerB_odds_col='playerB_odds',
+        target_col='binary_target'
+    )
 
-    random_forest_results = run_random_forest(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("Random Forest Results: ", random_forest_results)
+    # Evaluate each model's profitability
+    # We assume each run_model function returns a "Probabilities" key containing predict_proba
+    for res in model_results:
+        if "Probabilities" in res:
+            evaluator.evaluate_model(
+                res["Probabilities"],
+                model_name=res["Classifier"],
+                threshold=0.02  # 2% EV threshold as per Stanford paper logic
+            )
+        else:
+            print(f"Skipping betting evaluation for {res['Classifier']}: No probabilities found.")
 
-    #svm_results = run_svm(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("SVM Results: ", svm_results)
+    # 5. Final Comparison Summary
+    print("\n" + "=" * 50)
+    print("FINAL MODEL PERFORMANCE SUMMARY")
+    print("=" * 50)
+    for res in model_results:
+        print(f"{res['Classifier']}: Test Accuracy = {res['Accuracy']:.4f}, AUC = {res['AUC']:.4f}")
 
-    naive_bayes_results = run_naive_bayes(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("Naive Bayes Results: ", naive_bayes_results)
-
-    neural_net_results = run_mlp_neural_network(xTrain, xTest, yTrain, yTest, feature_names)
-    #print("MLP Neural Network Results: ", neural_net_results)
-
-    models_to_plot = {
-        #"LDA": lda_results["Best Model"],
-        #"Logistic Regression": log_reg_results["Best Model"],
-        #"Decision Tree": decision_tree_results["Best Model"],
-        #"Pre-pruned Tree": pre_pruned_tree_results["Best Model"],
-        #"Post-pruned Tree": post_prune_tree_results["Best Model"],
-        #"KNN": knn_results["Best Model"],
-        "Random Forest": random_forest_results["Best Model"],
-        #"SVM": svm_results["Best Model"],
-        "Naive Bayes": naive_bayes_results["Best Model"],
-        "MLP Neural Network": neural_net_results["Best Model"],
-        "XGBoost": xgboost_results["Best Model"],
-    }
-
-    plot_all_roc_curves(models_to_plot, xTest, yTest)
-
-    print("complete!")
+    print("\nComplete! Check visuals/ folder for performance plots.")
